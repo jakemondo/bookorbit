@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { ComicEpubConverterService } from './services/comic-epub-converter.service';
 import { CommonModule } from '../../common/common.module';
 import { UserModule } from '../user/user.module';
 import { UserBookStatusModule } from '../user-book-status/user-book-status.module';
@@ -22,6 +23,7 @@ import { KoboThumbnailService } from './services/kobo-thumbnail.service';
   imports: [CommonModule, UserModule, UserBookStatusModule],
   controllers: [KoboUserController, KoboAuthController, KoboSyncController, KoboDeviceController],
   providers: [
+    ComicEpubConverterService,
     KoboTokenGuard,
     KepubifyBinaryService,
     KoboDeviceService,

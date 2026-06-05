@@ -3,67 +3,70 @@ import { createReadStream } from 'fs';
 import { mkdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { promisify } from 'util';
-
+ 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyReply } from 'fastify';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-
+ 
 import { DB } from '../../../db/db.module';
 import * as schema from '../../../db/schema';
 import { KoboBookAccessService } from './kobo-book-access.service';
 import { KepubifyBinaryService } from './kepubify-binary.service';
 import { KoboSettingsService } from './kobo-settings.service';
-
+import { ComicEpubConverterService } from './comic-epub-converter.service';
+ 
 type Db = NodePgDatabase<typeof schema>;
-
+ 
 const execFileAsync = promisify(execFile);
-
+ 
+const COMIC_FORMATS = new Set(['cbz', 'cbr', 'cb7']);
+ 
 const MIME: Record<string, string> = {
   epub: 'application/epub+zip',
   'kepub.epub': 'application/epub+zip',
   pdf: 'application/pdf',
-  cbz: 'application/vnd.comicbook+zip',
-  cbr: 'application/vnd.comicbook-rar',
-  cb7: 'application/x-cb7',
 };
-
+ 
 @Injectable()
 export class KoboDownloadService {
   private readonly logger = new Logger(KoboDownloadService.name);
   private readonly appDataPath: string;
   private readonly kepubCachePath: string;
-
+  private readonly comicEpubCachePath: string;
+ 
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly config: ConfigService,
     private readonly kepubifyBinaryService: KepubifyBinaryService,
     private readonly settingsService: KoboSettingsService,
     private readonly bookAccessService: KoboBookAccessService,
+    private readonly comicEpubConverter: ComicEpubConverterService,
   ) {
     this.appDataPath = this.config.get<string>('storage.appDataPath')!;
     this.kepubCachePath = join(this.appDataPath, '.kepub-cache');
+    this.comicEpubCachePath = join(this.appDataPath, '.comic-epub-cache');
   }
-
+ 
   async streamBook(userId: number, bookId: number, reply: FastifyReply) {
     const book = await this.db.query.books.findFirst({ where: eq(schema.books.id, bookId) });
     if (!book) throw new NotFoundException('Book not found');
-
+ 
     await this.bookAccessService.assertBookAccessible(userId, bookId);
-
+ 
     const file = await this.db.query.bookFiles.findFirst({
       where: and(eq(schema.bookFiles.bookId, bookId), eq(schema.bookFiles.id, book.primaryFileId ?? -1)),
     });
-
+ 
     if (!file) throw new NotFoundException('No file found for this book');
-
+ 
     const format = (file.format ?? 'epub').toLowerCase();
-
+ 
     if (format === 'pdf') {
       return this.streamFile(file.absolutePath, file.id, format, reply);
     }
-
+ 
     if (format === 'epub') {
       const settings = await this.settingsService.getSettings(userId);
       const limitBytes = settings.kepubConversionLimitMb * 1024 * 1024;
@@ -71,11 +74,40 @@ export class KoboDownloadService {
       if (settings.convertToKepub && withinLimit) {
         return this.streamKepub(file.absolutePath, file.hash ?? 'nohash', bookId, file.id, settings.forceEnableHyphenation, reply);
       }
+      return this.streamFile(file.absolutePath, file.id, format, reply);
     }
-
+ 
+    if (COMIC_FORMATS.has(format)) {
+      return this.streamComicAsEpub(file.absolutePath, format, bookId, file.id, reply);
+    }
+ 
     return this.streamFile(file.absolutePath, file.id, format, reply);
   }
-
+ 
+  private async streamComicAsEpub(absolutePath: string, format: string, bookId: number, fileId: number, reply: FastifyReply) {
+    try {
+      // Fetch book title for EPUB metadata
+      const metadata = await this.db.query.bookMetadata.findFirst({
+        where: eq(schema.bookMetadata.bookId, bookId),
+        columns: { title: true },
+      });
+      const title = metadata?.title ?? `Book ${bookId}`;
+ 
+      const epubPath = await this.comicEpubConverter.convertToEpub(
+        absolutePath,
+        format,
+        bookId,
+        title,
+        this.comicEpubCachePath,
+      );
+ 
+      return this.streamFile(epubPath, fileId, 'epub', reply);
+    } catch (err) {
+      this.logger.warn(`Comic EPUB conversion failed for book ${bookId}, falling back to raw file: ${(err as Error).message}`);
+      return this.streamFile(absolutePath, fileId, format, reply);
+    }
+  }
+ 
   private async streamFile(absolutePath: string, fileId: number, format: string, reply: FastifyReply) {
     try {
       const { size } = await stat(absolutePath);
@@ -87,19 +119,19 @@ export class KoboDownloadService {
       throw new NotFoundException('File not found on disk');
     }
   }
-
+ 
   private async streamKepub(sourcePath: string, fileHash: string, bookId: number, fileId: number, hyphenate: boolean, reply: FastifyReply) {
     const cacheDir = join(this.kepubCachePath, String(bookId));
     const cacheKey = hyphenate ? `${fileHash}-hyph` : fileHash;
     const cachedPath = join(cacheDir, `${cacheKey}.kepub.epub`);
-
+ 
     try {
       await stat(cachedPath);
       return this.streamFile(cachedPath, fileId, 'kepub.epub', reply);
     } catch {
       // Cache miss - convert
     }
-
+ 
     try {
       const binaryPath = await this.kepubifyBinaryService.getBinaryPath();
       await mkdir(cacheDir, { recursive: true });
