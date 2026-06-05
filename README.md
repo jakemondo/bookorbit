@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <div align="center">
 
 # BookOrbit
@@ -121,3 +122,7 @@ For local development, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). To contri
 ## License
 
 BookOrbit is licensed under the **[GNU Affero General Public License v3.0](LICENSE)**.
+=======
+# bookorbit
+my own bookorbit version
+>>>>>>> 2c4eb7007e2858b0942aabbe6b7c3f12db1d2284

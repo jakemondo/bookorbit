@@ -393,7 +393,9 @@ export class KoboSyncService {
 
   private buildBookMetadata(book: KoboBookEntry, deviceToken: string, baseUrl: string) {
     const id = String(book.bookId);
-    const format = book.fileFormat.toLowerCase() === 'pdf' ? 'PDF' : 'EPUB3';
+    const COMIC_FORMATS = ['cbz', 'cbr', 'cb7'];
+    const fmt = book.fileFormat.toLowerCase();
+    const format = fmt === 'pdf' ? 'PDF' : COMIC_FORMATS.includes(fmt) ? 'EPUB3' : 'EPUB3';
     const downloadUrl = `${baseUrl}/api/v1/kobo/${deviceToken}/v1/books/${book.bookId}/download`;
     const slug = book.title ? book.title.toLowerCase().replace(/[^a-z0-9]/g, '-') : id;
     const publicationDate = book.publishedYear ? new Date(Date.UTC(book.publishedYear, 0, 1)).toISOString() : null;
@@ -496,7 +498,7 @@ export class KoboSyncService {
 
     return and(
       eq(schema.books.status, 'present'),
-      eq(schema.bookFiles.format, 'epub'),
+      inArray(schema.bookFiles.format, ['epub', 'cbz', 'cbr', 'cb7']),
       libraryAccessFilter,
       collectionMembershipFilter,
       ...contentFilterClauses,

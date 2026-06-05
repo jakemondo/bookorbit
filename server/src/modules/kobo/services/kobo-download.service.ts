@@ -24,6 +24,9 @@ const MIME: Record<string, string> = {
   epub: 'application/epub+zip',
   'kepub.epub': 'application/epub+zip',
   pdf: 'application/pdf',
+  cbz: 'application/vnd.comicbook+zip',
+  cbr: 'application/vnd.comicbook-rar',
+  cb7: 'application/x-cb7',
 };
 
 @Injectable()
