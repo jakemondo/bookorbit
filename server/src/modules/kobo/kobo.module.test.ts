@@ -17,6 +17,7 @@ import { KoboReadingStateService } from './services/kobo-reading-state.service';
 import { KoboSettingsService } from './services/kobo-settings.service';
 import { KoboSyncService } from './services/kobo-sync.service';
 import { KoboThumbnailService } from './services/kobo-thumbnail.service';
+import { ComicEpubConverterService } from './services/comic-epub-converter.service';
 
 describe('KoboModule', () => {
   it('registers expected controllers and providers', () => {
@@ -35,6 +36,7 @@ describe('KoboModule', () => {
       KoboThumbnailService,
       KoboDownloadService,
       KoboProxyService,
+      ComicEpubConverterService,
     ]);
   });
 });
