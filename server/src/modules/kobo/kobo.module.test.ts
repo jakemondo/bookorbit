@@ -26,6 +26,7 @@ describe('KoboModule', () => {
 
     expect(controllers).toEqual([KoboUserController, KoboAuthController, KoboSyncController, KoboDeviceController]);
     expect(providers).toEqual([
+      ComicEpubConverterService,
       KoboTokenGuard,
       KepubifyBinaryService,
       KoboDeviceService,
@@ -36,7 +37,6 @@ describe('KoboModule', () => {
       KoboThumbnailService,
       KoboDownloadService,
       KoboProxyService,
-      ComicEpubConverterService,
     ]);
   });
 });
