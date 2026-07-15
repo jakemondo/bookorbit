@@ -32,6 +32,7 @@ function makeDeps() {
       },
     },
     kepubConversionService: { getKepubPath: vi.fn() },
+    comicEpubConversionService: { getComicEpubPath: vi.fn() },
     settingsService: { getSettings: vi.fn() },
     bookAccessService: { assertBookAccessible: vi.fn() },
   };
@@ -41,6 +42,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
   return new KoboDownloadService(
     deps.db as never,
     deps.kepubConversionService as never,
+    deps.comicEpubConversionService as never,
     deps.settingsService as never,
     deps.bookAccessService as never,
   );
