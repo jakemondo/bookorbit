@@ -80,13 +80,7 @@ export class KoboDownloadService {
    * page streaming), then handed to the same optional EPUB → KEPUB path used
    * for ordinary ebooks so two-way progress sync keeps working.
    */
-  private async streamComic(
-    file: typeof schema.bookFiles.$inferSelect,
-    format: string,
-    bookId: number,
-    userId: number,
-    reply: FastifyReply,
-  ) {
+  private async streamComic(file: typeof schema.bookFiles.$inferSelect, format: string, bookId: number, userId: number, reply: FastifyReply) {
     const start = Date.now();
     try {
       const metadata = await this.db.query.bookMetadata.findFirst({
