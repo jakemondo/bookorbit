@@ -12,7 +12,7 @@ import {
   type RuleOperator,
 } from '@bookorbit/types'
 import { READ_STATUSES } from '@bookorbit/types'
-import { FIELD_LABELS, OPERATOR_LABELS } from '@/features/book/lib/filter-labels'
+import { fieldLabel, operatorLabel } from '@/features/book/lib/filter-labels'
 import { providerIconPathSafe } from '@/features/book/lib/provider-icons'
 import { PROVIDER_SHORT_LABELS } from '@/lib/provider-colors'
 import { useLibraries } from '@/features/library/composables/useLibraries'
@@ -394,7 +394,7 @@ function showValueToInput(operator: RuleOperator): boolean {
           @change="onFieldChange(index)"
           class="h-9 rounded-md border border-input bg-background text-foreground text-sm px-2 focus:outline-none focus:ring-2 focus:ring-primary shrink-0"
         >
-          <option v-for="field in RULE_FIELDS" :key="field" :value="field">{{ FIELD_LABELS[field] }}</option>
+          <option v-for="field in RULE_FIELDS" :key="field" :value="field">{{ fieldLabel(field) }}</option>
         </select>
 
         <select
@@ -402,7 +402,7 @@ function showValueToInput(operator: RuleOperator): boolean {
           @change="onOperatorChange(index)"
           class="h-9 rounded-md border border-input bg-background text-foreground text-sm px-2 focus:outline-none focus:ring-2 focus:ring-primary shrink-0"
         >
-          <option v-for="op in FIELD_OPERATORS[node.rule.field]" :key="op" :value="op">{{ OPERATOR_LABELS[op] }}</option>
+          <option v-for="op in FIELD_OPERATORS[node.rule.field]" :key="op" :value="op">{{ operatorLabel(op) }}</option>
         </select>
 
         <div
@@ -417,7 +417,7 @@ function showValueToInput(operator: RuleOperator): boolean {
           />
           <select
             v-model="node.rule.provider"
-            class="h-7 bg-transparent text-foreground text-sm outline-none"
+            class="h-7 bg-background text-foreground text-sm outline-none"
             :aria-label="t('book.filter.communityRatingProvider')"
             @change="emitUpdate"
           >
@@ -448,13 +448,13 @@ function showValueToInput(operator: RuleOperator): boolean {
               class="flex items-center gap-1 h-5 px-1.5 rounded bg-primary/15 text-primary text-xs font-medium shrink-0"
             >
               {{ libraryName }}
-              <button type="button" class="text-primary/60 hover:text-primary leading-none" @click="removeLibraryChip(index, libraryName)">
+              <button type="button" class="text-primary hover:text-primary leading-none" @click="removeLibraryChip(index, libraryName)">
                 <X :size="10" />
               </button>
             </span>
             <select
               :value="''"
-              class="h-7 flex-1 min-w-32 bg-transparent text-foreground text-sm outline-none"
+              class="h-7 flex-1 min-w-32 bg-background text-foreground text-sm outline-none"
               @change="addLibraryChip(index, $event)"
             >
               <option value="" disabled>
@@ -486,15 +486,11 @@ function showValueToInput(operator: RuleOperator): boolean {
               class="flex items-center gap-1 h-5 px-1.5 rounded bg-primary/15 text-primary text-xs font-medium shrink-0"
             >
               {{ READ_STATUS_LABELS[status] ?? status }}
-              <button type="button" class="text-primary/60 hover:text-primary leading-none" @click="removeStatusChip(index, status)">
+              <button type="button" class="text-primary hover:text-primary leading-none" @click="removeStatusChip(index, status)">
                 <X :size="10" />
               </button>
             </span>
-            <select
-              :value="''"
-              class="h-7 flex-1 min-w-32 bg-transparent text-foreground text-sm outline-none"
-              @change="addStatusChip(index, $event)"
-            >
+            <select :value="''" class="h-7 flex-1 min-w-32 bg-background text-foreground text-sm outline-none" @change="addStatusChip(index, $event)">
               <option value="" disabled>{{ t('book.filter.selectStatus') }}</option>
               <option v-for="status in READ_STATUSES" :key="status" :value="status" :disabled="node.rule.valueChips.includes(status)">
                 {{ READ_STATUS_LABELS[status] ?? status }}
@@ -601,7 +597,7 @@ function showValueToInput(operator: RuleOperator): boolean {
 
         <button
           @click="removeNode(index)"
-          class="ml-auto h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+          class="ml-auto h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
         >
           <Trash2 :size="13" />
         </button>
@@ -611,13 +607,13 @@ function showValueToInput(operator: RuleOperator): boolean {
       <div v-else-if="node.kind === 'group'" class="flex items-start gap-2">
         <div class="flex-1 rounded-lg border border-primary/20 bg-primary/3 p-3">
           <div class="flex items-center justify-between mb-3">
-            <span class="text-[10px] font-semibold uppercase tracking-widest text-primary/50">{{ t('book.filter.group') }}</span>
+            <span class="text-[10px] font-semibold uppercase tracking-widest text-primary">{{ t('book.filter.group') }}</span>
           </div>
           <BookFilterBuilder :model-value="node.group" :depth="(depth ?? 0) + 1" @update:model-value="onSubGroupUpdate(index, $event)" />
         </div>
         <button
           @click="removeNode(index)"
-          class="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0 mt-1"
+          class="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0 mt-1"
         >
           <Trash2 :size="13" />
         </button>
@@ -636,7 +632,7 @@ function showValueToInput(operator: RuleOperator): boolean {
       <button
         v-if="(depth ?? 0) < MAX_DEPTH"
         @click="addGroup"
-        class="flex items-center gap-1.5 h-9 px-4 rounded-lg border border-dashed border-primary/30 text-sm text-primary/50 hover:text-primary hover:border-primary hover:bg-primary/5 transition-colors"
+        class="flex items-center gap-1.5 h-9 px-4 rounded-lg border border-dashed border-primary/30 text-sm text-primary hover:text-primary hover:border-primary hover:bg-primary/5 transition-colors"
       >
         <Plus :size="13" />
         {{ t('book.filter.addGroup') }}

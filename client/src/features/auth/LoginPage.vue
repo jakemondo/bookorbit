@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { OidcProviderPublic } from '@bookorbit/types'
 import { Moon, Sun, Wallpaper } from '@lucide/vue'
-import { ACCENT_VIVID, ACCENT_PASTEL, ACCENT_OPTIONS, RADIUS_OPTIONS, BACKGROUND_OPTIONS, useThemeStore } from '@/stores/theme'
+import { ACCENT_OPTIONS, ACCENT_ROWS, RADIUS_OPTIONS, BACKGROUND_OPTIONS, useThemeStore } from '@/stores/theme'
 import { useAuth } from './composables/useAuth'
 import { useOidc } from './composables/useOidc'
 import { useSetupStatus } from './composables/useSetupStatus'
@@ -111,11 +111,13 @@ async function handleOidcLogin(provider: OidcProviderPublic) {
       <Tooltip>
         <TooltipTrigger as-child>
           <button class="theme-btn" @click="themeStore.toggleTheme()">
-            <Sun v-if="themeStore.theme === 'dark'" :size="14" />
+            <Sun v-if="themeStore.resolvedTheme === 'dark'" :size="14" />
             <Moon v-else :size="14" />
           </button>
         </TooltipTrigger>
-        <TooltipContent>{{ themeStore.theme === 'dark' ? t('auth.themePicker.switchToLight') : t('auth.themePicker.switchToDark') }}</TooltipContent>
+        <TooltipContent>{{
+          themeStore.resolvedTheme === 'dark' ? t('auth.themePicker.switchToLight') : t('auth.themePicker.switchToDark')
+        }}</TooltipContent>
       </Tooltip>
 
       <!-- Radius picker -->
@@ -188,40 +190,28 @@ async function handleOidcLogin(provider: OidcProviderPublic) {
       <div class="relative">
         <!-- Colour popover -->
         <Transition name="popover">
-          <div v-if="accentOpen" class="accent-popover absolute top-full right-0 mt-2 p-3 rounded-lg space-y-2">
-            <div class="flex items-center gap-1.5">
-              <Tooltip v-for="opt in ACCENT_VIVID" :key="opt.id">
-                <TooltipTrigger as-child>
-                  <button
-                    class="w-4 h-4 rounded-full transition-all hover:scale-125 focus:outline-none shrink-0"
-                    :style="{
-                      backgroundColor: opt.color,
-                      outline: themeStore.accent === opt.id ? `2px solid ${opt.color}` : 'none',
-                      outlineOffset: '2px',
-                      transform: themeStore.accent === opt.id ? 'scale(1.2)' : '',
-                    }"
-                    @click="themeStore.setAccent(opt.id)"
-                  />
-                </TooltipTrigger>
-                <TooltipContent>{{ opt.label }}</TooltipContent>
-              </Tooltip>
-            </div>
-            <div class="flex items-center gap-1.5">
-              <Tooltip v-for="opt in ACCENT_PASTEL" :key="opt.id">
-                <TooltipTrigger as-child>
-                  <button
-                    class="w-4 h-4 rounded-full transition-all hover:scale-125 focus:outline-none shrink-0"
-                    :style="{
-                      backgroundColor: opt.color,
-                      outline: themeStore.accent === opt.id ? `2px solid ${opt.color}` : 'none',
-                      outlineOffset: '2px',
-                      transform: themeStore.accent === opt.id ? 'scale(1.2)' : '',
-                    }"
-                    @click="themeStore.setAccent(opt.id)"
-                  />
-                </TooltipTrigger>
-                <TooltipContent>{{ opt.label }}</TooltipContent>
-              </Tooltip>
+          <div v-if="accentOpen" class="accent-popover absolute top-full right-0 mt-2 p-3 rounded-lg space-y-2 w-96 max-w-[calc(100vw-2rem)]">
+            <div class="overflow-x-auto no-scrollbar px-1 py-0.5">
+              <div class="space-y-2 w-max">
+                <div v-for="(row, rowIndex) in ACCENT_ROWS" :key="rowIndex" class="flex items-center gap-1.5">
+                  <Tooltip v-for="opt in row" :key="opt.id">
+                    <TooltipTrigger as-child>
+                      <button
+                        class="w-4 h-4 rounded-full transition-all hover:scale-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card shrink-0"
+                        :aria-label="t(opt.labelKey)"
+                        :style="{
+                          backgroundColor: opt.color,
+                          outline: themeStore.accent === opt.id ? `2px solid ${opt.color}` : 'none',
+                          outlineOffset: '2px',
+                          transform: themeStore.accent === opt.id ? 'scale(1.2)' : '',
+                        }"
+                        @click="themeStore.setAccent(opt.id)"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>{{ t(opt.labelKey) }}</TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
             </div>
           </div>
         </Transition>

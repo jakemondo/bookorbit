@@ -1,18 +1,33 @@
 # Localization
 
-BookOrbit uses Vue I18n catalogs under `client/src/locales/`. English is the source language, and Crowdin is the source of truth for German, Dutch, Brazilian Portuguese, and Slovenian translations.
+BookOrbit uses Vue I18n catalogs under `client/src/locales/`. English is the source language, and Crowdin is the source of truth for every other catalog listed below.
 
 ## Supported Catalogs
 
 | Application locale   | Crowdin language ID | Catalog   |
 | -------------------- | ------------------- | --------- |
 | English              | Source language     | `en.json` |
+| Czech                | `cs`                | `cs.json` |
+| Danish               | `da`                | `da.json` |
 | German               | `de`                | `de.json` |
+| Spanish              | `es-ES`             | `es.json` |
+| Finnish              | `fi`                | `fi.json` |
+| French               | `fr`                | `fr.json` |
+| Italian              | `it`                | `it.json` |
 | Dutch                | `nl`                | `nl.json` |
+| Polish               | `pl`                | `pl.json` |
 | Brazilian Portuguese | `pt-BR`             | `pt.json` |
+| Russian              | `ru`                | `ru.json` |
 | Slovenian            | `sl`                | `sl.json` |
+| Swedish              | `sv-SE`             | `sv.json` |
+| Ukrainian            | `uk`                | `uk.json` |
+| Simplified Chinese   | `zh-CN`             | `zh.json` |
 
-Crowdin's `%two_letters_code%` placeholder maps Brazilian Portuguese to `pt`, which matches BookOrbit's existing application locale and filename.
+Crowdin's `%two_letters_code%` placeholder reduces the regional IDs above to BookOrbit's application locale and filename: `es-ES` to `es`, `pt-BR` to `pt`, `sv-SE` to `sv`, and `zh-CN` to `zh`.
+
+Verify every ID against Crowdin's language list rather than assuming the two-letter form exists. Several languages have no bare two-letter ID at all: Swedish is `sv-SE`, and `sv-FI` reduces to the same `sv.json`, so enabling both would collide.
+
+Chinese ships as Simplified only under the bare `zh` locale, so every `zh-*` browser resolves to it, including Traditional readers. Adding Traditional later means a new `zh-Hant` catalog with a `languages_mapping` entry for `zh-TW`; `zh` keeps its Simplified meaning, so no rename or stored-preference migration is needed. That addition also requires matching by script subtag in `client/src/stores/locale.ts`, because the current base-language fallback would send `zh-Hant` to `zh`.
 
 ## Adding User-Facing Copy
 
@@ -29,15 +44,40 @@ When an English edit changes meaning rather than wording, prefer a new message k
 
 ## Plural Messages
 
-Vue I18n plural messages use pipe-separated branches:
+Plural messages use ICU MessageFormat:
 
 ```text
-No books | 1 book | {count} books
+{count, plural, =0 {No books} one {1 book} other {# books}}
 ```
 
-Crowdin's JSON parser treats this syntax as ordinary text. Translators must preserve the pipe-separated structure and placeholders manually. Locale branch counts can differ; Slovenian commonly needs more branches than English.
+Pass the raw numeric value through the interpolation object:
 
-Repository validation rejects missing plural structure, empty plural branches, placeholder mismatches, embedded HTML, and Unicode em dash characters. Human review is still required for locale-specific plural semantics.
+```ts
+t("library.bookCount", { count });
+```
+
+Do not use Vue I18n's positional plural argument, pre-format `count`, or add pipe-separated branches. ICU selects CLDR plural categories and formats `#` for the active locale. Every target message must preserve the source arguments and exact selectors such as `=0`, and must include every cardinal category required by its locale. Slovenian therefore includes `one`, `two`, `few`, and `other`; other locales use their own CLDR categories.
+
+Repository validation compiles ordinary Vue I18n messages and rejects malformed syntax. For ICU plurals, it rejects malformed syntax, empty options, changed argument types or styles, changed plural offsets, missing locale categories, mismatched arguments or exact selectors, and legacy pipe branches. It also rejects embedded HTML and Unicode em dash characters. Human review is still required for the wording of each locale's plural branches.
+
+Changing the plural structure of an existing English message, rather than only its wording, invalidates every translation of that key because the target branches no longer match the source. Clear or invalidate the affected translations in Crowdin before the next export so translators re-author them in the new structure.
+
+### Styled Counts
+
+When the count needs its own markup, use `IcuCountText` instead of `<i18n-t>`, because compiled ICU messages cannot bind Vue I18n slots:
+
+```vue
+<IcuCountText
+  keypath="tools.bulkRename.confirmDialog.body"
+  :count="renameCount"
+>
+  <template #count="{ value }">
+    <strong>{{ value }}</strong>
+  </template>
+</IcuCountText>
+```
+
+The component only supplies `count`, so its message must not require other arguments, and validation requires every branch of such a message to render exactly one `#`.
 
 ## Translation Delivery
 
@@ -47,9 +87,11 @@ After an English source change reaches `main`:
 2. Translators update target strings in Crowdin.
 3. Crowdin exports the target catalogs to `l10n_main`.
 4. Crowdin opens a pull request to `main`.
-5. CI verifies that the pull request changes only the four target catalogs and runs the normal client checks.
+5. CI verifies that the pull request changes only the fifteen target catalogs and runs the normal client checks.
 6. A maintainer reviews and squash-merges the pull request.
-7. The `l10n_main` service branch is deleted. Crowdin recreates it for the next export.
+7. The `.github/workflows/crowdin-branch-cleanup.yml` workflow deletes the `l10n_main` service branch. Crowdin recreates it from the current `main` for the next export.
+
+Deleting that branch is required, not tidiness. Crowdin appends every export to the same service branch and never rebases it, so a branch that outlives its pull request keeps its original merge base. Each later export then diverges further from `main` and eventually conflicts on every catalog. The workflow runs when a pull request from `l10n_main` is closed as well as merged, because Crowdin reuses the branch either way.
 
 Crowdin pull requests must retain the configured `i18n(client)` title and commit format. The `i18n` commit type produces a patch release and an Internationalization release-note section. Crowdin's default `[ci skip]` commit suffix is disabled so pull-request validation runs before merge.
 
@@ -91,9 +133,47 @@ The shared locale list automatically updates the language picker, server prefere
 
 Create `client/src/locales/<locale>.json` with the exact key structure from `en.json` and English fallback values. Do not add partial catalogs. Crowdin will replace fallback values as translations are completed.
 
-Review `client/src/stores/locale.ts` and add browser-locale matching coverage to `client/src/stores/__tests__/locale.spec.ts`, especially for regional variants. Vue I18n supplies standard locale pluralization; if the language needs a project-specific rule, register it in `client/src/i18n/index.ts` and add focused tests.
+A catalog may instead arrive already translated, for example from a bulk translation pass. That is allowed, but the translations then exist only in Git and Crowdin will overwrite them unless they are imported first. Follow "Seed existing translations into Crowdin" below before enabling export.
 
-### 4. Allow Crowdin export and PR delivery
+Review `client/src/stores/locale.ts` and add browser-locale matching coverage to `client/src/stores/__tests__/locale.spec.ts`, especially for regional variants.
+
+Each ICU plural message must carry exactly the CLDR categories reported for the locale, plus every exact selector such as `=0` from the English source. Both directions matter:
+
+- A missing category fails `validate:locales`. Czech, Russian, and Ukrainian need `few` and `many` added to every plural message, seeded from the English `other` branch because the source has no corresponding text.
+- An extra category leaves Crowdin nowhere to store it, because the editor renders only the categories the locale defines. Chinese has just `other`, so an inherited `one` branch produces a permanent difference that `scripts/crowdin-verify/verify.mjs --reconcile` can never close.
+
+Extend the exhaustive ICU runtime tests in `client/src/i18n/icu.spec.ts` with counts that reach every category. Derive them from `Intl.PluralRules` rather than by analogy, because languages that report the same category set do not map counts the same way: Russian and Ukrainian select `many` for 5 and reach `other` only through a fraction such as 1.5, while Czech selects `other` for 5 and reserves `many` for fractions.
+
+### 4. Seed existing translations into Crowdin
+
+Skip this step when the catalog holds English fallback values. It applies only when the catalog already contains real translations.
+
+Crowdin does not import repository translations on its own, and untranslated strings export as English source text. A pre-translated catalog that is never imported is therefore silently reverted to English by the first export.
+
+Order matters, because merging the `crowdin.yml` change enables export for the language:
+
+1. Pause translation synchronization, or keep the language out of `export_languages` until verification passes.
+2. Add the target language in Crowdin.
+3. Import the catalog with Crowdin's translation import, allowing translations that match the source so entries such as product names and identifiers are not dropped.
+4. Verify, reconcile, and only then enable export.
+
+**The progress percentage does not verify anything.** Crowdin's bulk translation import is lossy: it silently skips entries that the per-string translation endpoint accepts. Observed causes include translations that add punctuation the English source lacks, and ICU messages carrying a plural category the source does not use, such as Spanish or Portuguese `many`. A language can report 96 to 98 percent while real translations are missing, and those gaps export as English over good translations in Git.
+
+Verify by building the export and diffing it against the catalog:
+
+```bash
+CROWDIN_TOKEN=... node scripts/crowdin-verify/verify.mjs es-ES es.json
+```
+
+The script exits non-zero while any key differs. Pass `--reconcile` to push the remaining strings through the per-string endpoint, which accepts what the bulk import rejected:
+
+```bash
+CROWDIN_TOKEN=... node scripts/crowdin-verify/verify.mjs es-ES es.json --reconcile
+```
+
+A language is safe to export only when the script reports zero differing keys. Run it for every seeded language before resuming synchronization.
+
+### 5. Allow Crowdin export and PR delivery
 
 Update `crowdin.yml`:
 
@@ -104,7 +184,7 @@ Update `scripts/classify-crowdin-pr.sh` to allow the new target catalog path. Do
 
 Before merging, add the target language in Crowdin while the current `main` configuration still excludes it from `export_languages`, or pause translation synchronization. Merge the repository support before allowing the first export. After merge, run a manual source and translation sync and confirm that the generated PR changes only explicitly allowed target catalogs.
 
-### 5. Verify the new language
+### 6. Verify the new language
 
 Run:
 
@@ -129,6 +209,7 @@ Then verify manually:
 - Representative desktop and mobile screens handle translated text expansion.
 - RTL layout, keyboard navigation, focus states, dialogs, menus, and popovers remain usable when applicable.
 - A manual Crowdin export produces the expected filename and passes all PR checks.
+- For a seeded catalog, `scripts/crowdin-verify/verify.mjs` reports zero differing keys.
 
 Only enable scheduled export for the new language after this manual round trip succeeds.
 

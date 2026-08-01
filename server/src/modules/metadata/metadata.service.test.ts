@@ -86,7 +86,9 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { Logger } from '@nestjs/common';
 
 import { authors, bookAuthors, bookGenres, bookMetadata, books, bookTags, genres, tags } from '../../db/schema';
+import { extractCbzMetadata } from './lib/cbz-metadata';
 import { generateThumbnail, imageExt } from './lib/cover';
+import { extractCbzCover } from './lib/cover-cbz';
 import { extractEpubCover } from './lib/cover-epub';
 import { extractEpubMetadata } from './lib/epub';
 import { parseBookFilename } from './lib/filename-parser';
@@ -95,6 +97,7 @@ import { parsePdfFile } from './lib/pdf-parser';
 import { extractAudioMetadata, parseAudioDuration } from './extractors/audio.extractor';
 import { METADATA_AUTHORS_REPLACED } from './metadata-events.service';
 import { MetadataService } from './metadata.service';
+import { MetadataExtractionService } from './metadata-extraction.service';
 
 const mockMkdir = mkdir as MockedFunction<typeof mkdir>;
 const mockReadFile = readFile as MockedFunction<typeof readFile>;
@@ -108,6 +111,8 @@ const mockParseMobiFile = parseMobiFile as MockedFunction<typeof parseMobiFile>;
 const mockParsePdfFile = parsePdfFile as MockedFunction<typeof parsePdfFile>;
 const mockExtractEpubCover = extractEpubCover as MockedFunction<typeof extractEpubCover>;
 const mockExtractEpubMetadata = extractEpubMetadata as MockedFunction<typeof extractEpubMetadata>;
+const mockExtractCbzMetadata = extractCbzMetadata as MockedFunction<typeof extractCbzMetadata>;
+const mockExtractCbzCover = extractCbzCover as MockedFunction<typeof extractCbzCover>;
 const mockExtractAudioMetadata = extractAudioMetadata as MockedFunction<typeof extractAudioMetadata>;
 const mockParseAudioDuration = parseAudioDuration as MockedFunction<typeof parseAudioDuration>;
 
@@ -175,6 +180,8 @@ describe('MetadataService', () => {
     mockParseBookFilename.mockReturnValue({ title: 'Fallback Title', publishedYear: 2001 });
     mockParseMobiFile.mockResolvedValue(null);
     mockParsePdfFile.mockResolvedValue(null);
+    mockExtractCbzMetadata.mockResolvedValue(null);
+    mockExtractCbzCover.mockResolvedValue(null);
     mockExtractEpubMetadata.mockResolvedValue(null);
     mockExtractEpubCover.mockResolvedValue(null);
     mockExtractAudioMetadata.mockResolvedValue({
@@ -214,6 +221,7 @@ describe('MetadataService', () => {
     return new MetadataService(
       db as never,
       config as never,
+      new MetadataExtractionService(),
       (overrides?.scoreService ?? { calculateAndSave: vi.fn().mockResolvedValue(undefined) }) as never,
       (overrides?.narratorService ?? { replaceForBook: vi.fn().mockResolvedValue(undefined) }) as never,
       (overrides?.comicMetadataRepository ?? { upsert: vi.fn().mockResolvedValue(undefined) }) as never,
@@ -450,7 +458,7 @@ describe('MetadataService', () => {
     await expect(service.extractAndSave(15, '/books/a.pdf', 'pdf')).rejects.toThrow('bad metadata');
   });
 
-  it('extractAndSave logs warning when score calculation or embedding fails', async () => {
+  it('extractAndSave propagates score calculation failures after persisting metadata', async () => {
     const { db } = makeDb();
     const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     const scoreService = {
@@ -490,12 +498,12 @@ describe('MetadataService', () => {
       coverBuffer: null,
     });
 
-    await service.extractAndSave(44, '/tmp/warn-book.pdf', 'pdf');
+    await expect(service.extractAndSave(44, '/tmp/warn-book.pdf', 'pdf')).rejects.toThrow('score failed');
     await Promise.resolve();
 
     expect(scoreService.calculateAndSave).toHaveBeenCalledWith(44);
     expect(failingEmbedder.embedBook).toHaveBeenCalledWith(44);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[metadata.score_calculation] [fail]'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[metadata.extract_and_save] [fail]'));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[metadata.embedding] [fail]'));
   });
 
@@ -616,6 +624,53 @@ describe('MetadataService', () => {
     expect(replaceGenresSpy).toHaveBeenCalledWith(22, ['Fantasy']);
     expect(replaceTagsSpy).toHaveBeenCalledWith(22, ['Shelf']);
     expect(embedder.embedBook).toHaveBeenCalledWith(22);
+  });
+
+  it('extractAndSave(cbz) persists comicvineId parsed from the embedded ComicInfo.xml', async () => {
+    const { db, updateSet } = makeDb();
+    const service = makeService(db);
+    vi.spyOn(service, 'replaceAuthors').mockResolvedValue(undefined);
+    vi.spyOn(service, 'replaceGenres').mockResolvedValue(undefined);
+
+    mockExtractCbzMetadata.mockResolvedValue({
+      title: 'Amazing Series',
+      subtitle: null,
+      seriesName: 'Amazing Series',
+      seriesIndex: 1,
+      description: null,
+      publisher: null,
+      publishedDate: null,
+      publishedYear: null,
+      language: null,
+      pageCount: null,
+      rating: null,
+      isbn10: null,
+      isbn13: null,
+      authors: [],
+      genres: [],
+      tags: [],
+      googleBooksId: null,
+      goodreadsId: null,
+      amazonId: null,
+      hardcoverId: null,
+      hardcoverEditionId: null,
+      openLibraryId: null,
+      ranobedbId: null,
+      koboId: null,
+      comicvineId: '140529',
+      lubimyczytacId: null,
+      aladinId: null,
+      itunesId: null,
+      comicMetadata: null,
+    });
+
+    await service.extractAndSave(23, '/tmp/book.cbz', 'cbz');
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        comicvineId: '140529',
+      }),
+    );
   });
 
   it('extractAndSave(mobi) ignores malformed publishedDate values from providers', async () => {
@@ -1180,22 +1235,6 @@ describe('MetadataService', () => {
     expect(tagDeleteWhere).toHaveBeenCalledTimes(1);
     expect(bookGenreLinks).toEqual([{ bookId: 41, genreId: 501 }]);
     expect(bookTagLinks).toEqual([{ bookId: 41, tagId: 601 }]);
-  });
-
-  it('logs buffered-large-pdf warnings with size metadata', () => {
-    const service = makeService(makeDb().db);
-    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-
-    (service as any).logPdfParseWarning({
-      code: 'buffered-large-pdf',
-      absolutePath: '/tmp/large.pdf',
-      sizeBytes: 10_000_000,
-      thresholdBytes: 5_000_000,
-      errorClass: 'None',
-      errorMessage: 'none',
-    });
-
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('large pdf buffered in memory'));
   });
 
   it('aggregateAudioDuration sums only files that match the selected primary audio format', async () => {

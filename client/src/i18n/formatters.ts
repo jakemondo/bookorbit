@@ -5,6 +5,7 @@ import { i18n } from '@/i18n'
 const numberFormatters = new Map<string, Intl.NumberFormat>()
 const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>()
 const relativeTimeFormatters = new Map<string, Intl.RelativeTimeFormat>()
+const languageNameFormatters = new Map<Locale, Intl.DisplayNames>()
 
 function activeLocale(): Locale {
   return (i18n.global.locale as Ref<Locale>).value
@@ -23,6 +24,15 @@ export function formatNumber(value: number, options: Intl.NumberFormatOptions = 
     numberFormatters.set(key, formatter)
   }
   return formatter.format(value)
+}
+
+/**
+ * Short form for counts in tight spots such as sidebar badges: 1000 becomes 1K, 1234 becomes 1.2K.
+ * Locales without a short thousands form (German) keep the grouped number, which is the correct
+ * rendering for them.
+ */
+export function formatCompactNumber(value: number): string {
+  return formatNumber(value, { notation: 'compact' })
 }
 
 export function formatDate(value: Date | number, options: Intl.DateTimeFormatOptions = {}): string {
@@ -60,4 +70,18 @@ export function formatRelativeTime(
     relativeTimeFormatters.set(key, formatter)
   }
   return formatter.format(value, unit)
+}
+
+export function formatLanguageName(value: string): string {
+  const locale = activeLocale()
+  let formatter = languageNameFormatters.get(locale)
+  if (!formatter) {
+    formatter = new Intl.DisplayNames([locale], { type: 'language', fallback: 'none' })
+    languageNameFormatters.set(locale, formatter)
+  }
+  try {
+    return formatter.of(value) ?? value
+  } catch {
+    return value
+  }
 }

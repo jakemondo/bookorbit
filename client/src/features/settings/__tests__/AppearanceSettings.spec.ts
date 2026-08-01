@@ -62,6 +62,7 @@ const displayRefs = {
 
 const themeStore = {
   theme: 'dark',
+  resolvedTheme: 'dark',
   accent: 'blue',
   radius: 'rounded',
   background: 'vinyl',
@@ -108,8 +109,14 @@ vi.mock('@/composables/useDisplaySettingsSync', () => ({
 }))
 
 vi.mock('@/stores/theme', () => ({
-  ACCENT_VIVID: [{ id: 'blue', label: 'Blue', color: '#0000ff' }],
-  ACCENT_PASTEL: [{ id: 'grey', label: 'Grey', color: '#999999' }],
+  ACCENT_VIVID: [{ id: 'blue', label: 'Blue', labelKey: 'settings.appearance.theme.accents.blue', color: '#0000ff' }],
+  ACCENT_PASTEL: [{ id: 'grey', label: 'Grey', labelKey: 'settings.appearance.theme.accents.grey', color: '#999999' }],
+  ACCENT_ROWS: [
+    [{ id: 'blue', label: 'Blue', labelKey: 'settings.appearance.theme.accents.blue', color: '#0000ff' }],
+    [{ id: 'grey', label: 'Grey', labelKey: 'settings.appearance.theme.accents.grey', color: '#999999' }],
+    [],
+    [],
+  ],
   RADIUS_OPTIONS: [{ id: 'rounded', label: 'Rounded', className: 'rounded-lg' }],
   BACKGROUND_OPTIONS: [{ id: 'vinyl', label: 'Vinyl', cssClass: 'bg-muted' }],
   useThemeStore: () => themeStore,
@@ -196,6 +203,16 @@ describe('AppearanceSettings', () => {
       'Layout',
       'Behavior',
     ])
+  })
+
+  it('offers system as a color scheme preference', async () => {
+    const wrapper = mountComponent()
+    const systemButton = wrapper.findAll('button').find((button) => button.text().includes('System'))
+
+    expect(systemButton).toBeDefined()
+    await systemButton!.trigger('click')
+
+    expect(themeStore.setTheme).toHaveBeenCalledWith('system')
   })
 
   it('switches tabs through the appearance query param', async () => {

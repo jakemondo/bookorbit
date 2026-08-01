@@ -123,6 +123,9 @@ describe('Book Dock ingest + finalize (e2e)', () => {
           title: 'Edited Review Title',
           authors: ['Edited Review Author'],
           genres: ['Mystery'],
+          hardcoverId: 'edited-review-book',
+          hardcoverEditionId: 'edited-review-edition',
+          openLibraryId: 'OL123W',
         },
         targetLibraryId: destination.libraryId,
         targetFolderId: destination.libraryFolderId,
@@ -135,6 +138,9 @@ describe('Book Dock ingest + finalize (e2e)', () => {
       title: 'Edited Review Title',
       authors: ['Edited Review Author'],
       genres: ['Mystery'],
+      hardcoverId: 'edited-review-book',
+      hardcoverEditionId: 'edited-review-edition',
+      openLibraryId: 'OL123W',
     });
     expect(updated.targetLibraryId).toBe(destination.libraryId);
     expect(updated.targetFolderId).toBe(destination.libraryFolderId);
@@ -311,6 +317,9 @@ describe('Book Dock ingest + finalize (e2e)', () => {
       selectedMetadata: {
         title: 'Finalize Success Title',
         authors: ['Finalize Author'],
+        hardcoverId: 'finalize-success-book',
+        hardcoverEditionId: 'finalize-success-edition',
+        openLibraryId: 'OL456W',
       },
       targetLibraryId: destination.libraryId,
       targetFolderId: destination.libraryFolderId,
@@ -358,11 +367,21 @@ describe('Book Dock ingest + finalize (e2e)', () => {
     expect(await fileExists(bookDockRow.absolutePath)).toBe(false);
 
     const [metadata] = await context.db
-      .select({ title: schema.bookMetadata.title })
+      .select({
+        title: schema.bookMetadata.title,
+        hardcoverId: schema.bookMetadata.hardcoverId,
+        hardcoverEditionId: schema.bookMetadata.hardcoverEditionId,
+        openLibraryId: schema.bookMetadata.openLibraryId,
+      })
       .from(schema.bookMetadata)
       .where(eq(schema.bookMetadata.bookId, finalizedBookId))
       .limit(1);
-    expect(metadata?.title).toBe('Finalize Success Title');
+    expect(metadata).toMatchObject({
+      title: 'Finalize Success Title',
+      hardcoverId: 'finalize-success-book',
+      hardcoverEditionId: 'finalize-success-edition',
+      openLibraryId: 'OL456W',
+    });
     expect(await getBookDockRow(context, bookDockRow.id)).toBeUndefined();
   });
 
@@ -385,8 +404,8 @@ describe('Book Dock ingest + finalize (e2e)', () => {
     const existingBookId = seedBody.results[0]!.bookId!;
 
     const duplicateRow = await createBookDockRow(context, {
-      fileName: 'duplicate-input.fb2',
-      selectedMetadata: { title: 'Duplicate Candidate Title', authors: ['Another Author'], isbn13: '9780306406157' },
+      fileName: 'seed-duplicate.fb2',
+      selectedMetadata: { title: 'Duplicate Seed Title', authors: ['Duplicate Author'], isbn13: '9780306406157' },
       targetLibraryId: destination.libraryId,
       targetFolderId: destination.libraryFolderId,
     });
@@ -472,8 +491,8 @@ describe('Book Dock ingest + finalize (e2e)', () => {
     const existingBookId = seedBody.results[0]!.bookId!;
 
     const duplicateRow = await createBookDockRow(context, {
-      fileName: 'preview-duplicate-input.fb2',
-      selectedMetadata: { title: 'Preview Duplicate Candidate', authors: ['Different Author'], isbn13: '9780306406157' },
+      fileName: 'preview-seed-duplicate.fb2',
+      selectedMetadata: { title: 'Preview Duplicate Seed', authors: ['Preview Author'], isbn13: '9780306406157' },
       targetLibraryId: destination.libraryId,
       targetFolderId: destination.libraryFolderId,
     });
@@ -553,12 +572,12 @@ describe('Book Dock ingest + finalize (e2e)', () => {
     expect(await fileExists(readyRow.absolutePath)).toBe(true);
   });
 
-  it('finalize allows same title with different author when isbn is missing', async () => {
+  it('finalize allows the same ISBN when resolved destinations differ', async () => {
     const destination = await createLibraryWithFolder(context);
 
     const seedRow = await createBookDockRow(context, {
-      fileName: 'seed-same-title.fb2',
-      selectedMetadata: { title: 'Shared Title', authors: ['Author One'] },
+      fileName: 'same-isbn-first.fb2',
+      selectedMetadata: { title: 'Same ISBN First', authors: ['Author One'], isbn13: '9780306406157' },
       targetLibraryId: destination.libraryId,
       targetFolderId: destination.libraryFolderId,
     });
@@ -574,8 +593,8 @@ describe('Book Dock ingest + finalize (e2e)', () => {
     const existingBookId = seedBody.results[0]!.bookId!;
 
     const candidateRow = await createBookDockRow(context, {
-      fileName: 'candidate-same-title.fb2',
-      selectedMetadata: { title: 'Shared Title', authors: ['Author Two'] },
+      fileName: 'same-isbn-second.fb2',
+      selectedMetadata: { title: 'Same ISBN Second', authors: ['Author Two'], isbn13: '9780306406157' },
       targetLibraryId: destination.libraryId,
       targetFolderId: destination.libraryFolderId,
     });
@@ -860,6 +879,21 @@ describe('Book Dock ingest + finalize (e2e)', () => {
     expect(finalizeValidationResponse.statusCode).toBe(400);
     expect(finalizeValidationResponse.json()).toMatchObject({
       message: expect.arrayContaining(['defaultLibraryId and defaultFolderId must either both be provided or both be omitted']),
+    });
+
+    const bypassValidationResponse = await context.app.inject({
+      method: 'POST',
+      url: '/api/v1/book-dock/finalize',
+      headers: authHeader(context.adminToken),
+      payload: {
+        fileIds: [123],
+        overrides: [{ fileId: 123, skipDuplicateCheck: true }],
+      },
+    });
+
+    expect(bypassValidationResponse.statusCode).toBe(400);
+    expect(bypassValidationResponse.json()).toMatchObject({
+      message: expect.arrayContaining(['overrides.0.property skipDuplicateCheck should not exist']),
     });
 
     const retriableErrorRow = await createBookDockRow(context, {

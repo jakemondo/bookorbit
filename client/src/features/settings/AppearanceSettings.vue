@@ -19,8 +19,12 @@ const themeStore = useThemeStore()
 const activeTab = ref<Tab>(normalizeAppearanceTab(route.query.tab))
 const tabs = computed(() => APPEARANCE_TABS.map((id) => ({ id, label: t(`settings.appearance.tabs.${id}`) })))
 
-const accentLabel = computed(() => [...ACCENT_VIVID, ...ACCENT_PASTEL].find((opt) => opt.id === themeStore.accent)?.label ?? themeStore.accent)
+const accentLabel = computed(() => {
+  const option = [...ACCENT_VIVID, ...ACCENT_PASTEL].find((opt) => opt.id === themeStore.accent)
+  return option ? t(option.labelKey) : themeStore.accent
+})
 const backgroundLabel = computed(() => BACKGROUND_OPTIONS.find((opt) => opt.id === themeStore.background)?.label ?? themeStore.background)
+const themeLabel = computed(() => t(`settings.appearance.themeMode.${themeStore.theme}`))
 
 function syncTabFromRoute(value: unknown) {
   const normalized = normalizeAppearanceTab(value)
@@ -53,7 +57,7 @@ function selectTab(tab: Tab) {
     <p class="text-[11px] font-medium text-muted-foreground overflow-hidden text-ellipsis whitespace-nowrap">
       {{
         t('settings.appearance.mobileSummary', {
-          theme: themeStore.theme === 'dark' ? t('settings.appearance.themeMode.dark') : t('settings.appearance.themeMode.light'),
+          theme: themeLabel,
           accent: accentLabel,
           background: backgroundLabel,
         })

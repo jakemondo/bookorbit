@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DisplayPreferences, LocalePreferences, ThemePreferences } from '@bookorbit/types';
+import type { Accent, DisplayPreferences, LocalePreferences, ThemePreferences } from '@bookorbit/types';
 
 import { UserPreferencesRepository } from './user-preferences.repository';
 import { UserPreferencesService } from './user-preferences.service';
@@ -13,6 +13,43 @@ const validThemePreferences: ThemePreferences = {
   brightness: 35,
 };
 
+const addedAccentIds: readonly Accent[] = [
+  'scarlet',
+  'marigold',
+  'viridian',
+  'iris',
+  'rosewater',
+  'flax',
+  'foam',
+  'cornflower',
+  'vermilion',
+  'salmon',
+  'copper',
+  'sand',
+  'chartreuse',
+  'pear',
+  'wasabi',
+  'sprout',
+  'malachite',
+  'aloe',
+  'turquoise',
+  'aqua',
+  'acid-green',
+  'pistachio',
+  'electric-blue',
+  'baby-blue',
+  'ultramarine',
+  'bluebell',
+  'purple',
+  'thistle',
+  'amethyst',
+  'mauve',
+  'raspberry',
+  'rose-quartz',
+  'jade',
+  'sea-glass',
+];
+
 const validDisplayPreferences: DisplayPreferences = {
   portraitCoverSize: 180,
   squareCoverSize: 160,
@@ -22,6 +59,7 @@ const validDisplayPreferences: DisplayPreferences = {
   squareGridGap: 20,
   viewMode: 'grid',
   cardOverlays: ['progress-bar', 'format', 'rating'],
+  showJumpRails: true,
   smartScopeFilterExpanded: true,
   authorCoverSize: 140,
   authorCoverShape: 'circle',
@@ -39,7 +77,7 @@ const validDisplayPreferences: DisplayPreferences = {
 };
 
 const validLocalePreferences: LocalePreferences = {
-  locale: 'nl',
+  locale: 'it',
 };
 
 const repo = {
@@ -96,6 +134,13 @@ describe('UserPreferencesService', () => {
     expect(repo.upsert).toHaveBeenCalledWith(11, 'locale', validLocalePreferences);
   });
 
+  it.each(['es', 'fr', 'pl'] as const)('upsertLocalePreferences accepts the %s locale', async (locale) => {
+    const preferences: LocalePreferences = { locale };
+
+    await expect(service.upsertLocalePreferences(11, preferences)).resolves.toBeUndefined();
+    expect(repo.upsert).toHaveBeenCalledWith(11, 'locale', preferences);
+  });
+
   it('upsertLocalePreferences rejects unsupported locale', async () => {
     await expect(service.upsertLocalePreferences(11, { locale: 'unsupported' } as never)).rejects.toBeInstanceOf(BadRequestException);
     expect(repo.upsert).not.toHaveBeenCalled();
@@ -111,6 +156,37 @@ describe('UserPreferencesService', () => {
   it('upsertThemePreferences persists validated settings', async () => {
     await expect(service.upsertThemePreferences(11, validThemePreferences)).resolves.toBeUndefined();
     expect(repo.upsert).toHaveBeenCalledWith(11, 'theme', validThemePreferences);
+  });
+
+  it('upsertThemePreferences accepts the system theme', async () => {
+    const systemThemePreferences = { ...validThemePreferences, theme: 'system' } as const;
+
+    await expect(service.upsertThemePreferences(11, systemThemePreferences)).resolves.toBeUndefined();
+    expect(repo.upsert).toHaveBeenCalledWith(11, 'theme', systemThemePreferences);
+  });
+
+  it.each(addedAccentIds)('upsertThemePreferences accepts the %s accent', async (accent) => {
+    const preferences = { ...validThemePreferences, accent };
+
+    await expect(service.upsertThemePreferences(11, preferences)).resolves.toBeUndefined();
+    expect(repo.upsert).toHaveBeenCalledWith(11, 'theme', preferences);
+  });
+
+  it('upsertThemePreferences accepts a payload without surfaceOpacity', async () => {
+    await expect(service.upsertThemePreferences(11, { ...validThemePreferences })).resolves.toBeUndefined();
+    expect(repo.upsert).toHaveBeenCalledWith(11, 'theme', validThemePreferences);
+  });
+
+  it.each([80, 92, 100])('upsertThemePreferences accepts surfaceOpacity %i', async (surfaceOpacity) => {
+    const preferences = { ...validThemePreferences, surfaceOpacity };
+
+    await expect(service.upsertThemePreferences(11, preferences)).resolves.toBeUndefined();
+    expect(repo.upsert).toHaveBeenCalledWith(11, 'theme', preferences);
+  });
+
+  it.each([79, 101, 50.5])('upsertThemePreferences rejects surfaceOpacity %s', async (surfaceOpacity) => {
+    await expect(service.upsertThemePreferences(11, { ...validThemePreferences, surfaceOpacity })).rejects.toBeInstanceOf(BadRequestException);
+    expect(repo.upsert).not.toHaveBeenCalled();
   });
 
   it('upsertThemePreferences rejects invalid theme ids', async () => {
@@ -134,10 +210,8 @@ describe('UserPreferencesService', () => {
     expect(repo.upsert).not.toHaveBeenCalled();
   });
 
-  it('upsertThemePreferences rejects invalid background ids', async () => {
-    await expect(service.upsertThemePreferences(11, { ...validThemePreferences, background: 'stars' } as never)).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+  it.each(['stars', 'terminal'])('upsertThemePreferences rejects the unsupported %s background id', async (background) => {
+    await expect(service.upsertThemePreferences(11, { ...validThemePreferences, background } as never)).rejects.toBeInstanceOf(BadRequestException);
     expect(repo.upsert).not.toHaveBeenCalled();
   });
 
@@ -249,6 +323,31 @@ describe('UserPreferencesService', () => {
   it('upsertDisplayPreferences rejects non-boolean showSpineOnComics', async () => {
     await expect(
       service.upsertDisplayPreferences(11, { ...validDisplayPreferences, showSpineOnComics: 'yes' } as unknown as Record<string, unknown>),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('upsertDisplayPreferences accepts both showJumpRails values', async () => {
+    for (const value of [true, false]) {
+      await expect(
+        service.upsertDisplayPreferences(11, { ...validDisplayPreferences, showJumpRails: value } as unknown as Record<string, unknown>),
+      ).resolves.toBeUndefined();
+      expect(repo.upsert).toHaveBeenCalledWith(11, 'display', expect.objectContaining({ showJumpRails: value }));
+    }
+  });
+
+  it('upsertDisplayPreferences defaults showJumpRails to true when omitted', async () => {
+    const { showJumpRails, ...withoutFlag } = validDisplayPreferences;
+    void showJumpRails;
+
+    await expect(service.upsertDisplayPreferences(11, withoutFlag as unknown as Record<string, unknown>)).resolves.toBeUndefined();
+
+    expect(repo.upsert).toHaveBeenCalledWith(11, 'display', expect.objectContaining({ showJumpRails: true }));
+  });
+
+  it('upsertDisplayPreferences rejects non-boolean showJumpRails', async () => {
+    await expect(
+      service.upsertDisplayPreferences(11, { ...validDisplayPreferences, showJumpRails: 'yes' } as unknown as Record<string, unknown>),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(repo.upsert).not.toHaveBeenCalled();
   });

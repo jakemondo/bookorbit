@@ -2,9 +2,11 @@ import 'reflect-metadata';
 
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { ValidationPipe } from '@nestjs/common';
 
 import { BulkEditBookDockDto, BulkSetTargetDto, FinalizeBookDockDto, UpdateBookDockFileDto } from './dto';
 import { ListBookDockFilesDto } from './dto/list-book-dock-files.dto';
+import { normalizeBookDockMetadata } from './book-dock-metadata.utils';
 
 async function errorsFor<T extends object>(dtoClass: new () => T, value: Record<string, unknown>) {
   return validate(plainToInstance(dtoClass, value));
@@ -42,6 +44,63 @@ describe('BookDock DTO validation', () => {
     expect((await errorsFor(UpdateBookDockFileDto, { selectedMetadata: { publishedYear: 101 } })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateBookDockFileDto, { selectedMetadata: { publishedYear: 2201 } })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateBookDockFileDto, { selectedMetadata: { publishedYear: 1984.5 } })).length).toBeGreaterThan(0);
+  });
+
+  it('UpdateBookDockFileDto accepts every metadata field emitted by metadata search through the production validation path', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const selectedMetadata = {
+      title: 'Dune',
+      pageCount: 688,
+      narrators: ['Simon Vance'],
+      durationSeconds: 1200,
+      abridged: false,
+      chapters: [{ title: 'Chapter 1', startMs: 0 }],
+      seriesMemberships: [{ seriesName: 'Dune', seriesIndex: 1 }],
+      communityRatings: [{ provider: 'hardcover', rating: 4.5, ratingCount: 1000 }],
+      googleBooksId: 'google-id',
+      goodreadsId: 'goodreads-id',
+      amazonId: 'amazon-id',
+      hardcoverId: 'hardcover-id',
+      hardcoverEditionId: 'hardcover-edition-id',
+      openLibraryId: 'OL1W',
+      itunesId: 'itunes-id',
+      audibleId: 'audible-id',
+      librofmId: 'librofm-id',
+      koboId: 'kobo-id',
+      comicvineId: 'comicvine-id',
+      ranobedbId: 'ranobedb-id',
+      lubimyczytacId: 'lubimyczytac-id',
+      aladinId: 'aladin-id',
+      comicMetadata: { issueNumber: '1', pencillers: ['Artist'] },
+    };
+
+    await expect(pipe.transform({ selectedMetadata }, { type: 'body', metatype: UpdateBookDockFileDto, data: undefined })).resolves.toMatchObject({
+      selectedMetadata,
+    });
+  });
+
+  it('normalizes legacy fetched metadata into a payload accepted by the production validation path', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const selectedMetadata = normalizeBookDockMetadata({
+      title: "Harry Potter and the Sorcerer's Stone",
+      duration: 31260,
+      communityRatings: [
+        {
+          provider: 'audible',
+          rating: 4.78,
+          ratingCount: 16077,
+          updatedAt: '2026-07-22T05:10:27.373Z',
+        },
+      ],
+    });
+
+    await expect(pipe.transform({ selectedMetadata }, { type: 'body', metatype: UpdateBookDockFileDto, data: undefined })).resolves.toMatchObject({
+      selectedMetadata: {
+        title: "Harry Potter and the Sorcerer's Stone",
+        durationSeconds: 31260,
+        communityRatings: [{ provider: 'audible', rating: 4.78, ratingCount: 16077 }],
+      },
+    });
   });
 
   it('BulkSetTargetDto validates ids, filters, and nullable target fields', async () => {

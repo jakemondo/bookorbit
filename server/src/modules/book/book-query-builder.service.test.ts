@@ -1219,6 +1219,16 @@ describe('read status date filters (startedAt / finishedAt)', () => {
     const rule = getRuleSql(where);
     expect(rule.values[1]).toBe('2025-12-31');
   });
+
+  it('preserves a zero-padded year below 1000', () => {
+    const { builder } = makeBuilder();
+    const where = builder.buildWhere(
+      wrapRule({ type: 'rule', field: 'finishedAt', operator: 'before', value: '0021-12-31' }) as never,
+      USER_CTX,
+    ) as any;
+    const rule = getRuleSql(where);
+    expect(rule.values[1]).toBe('0021-12-31');
+  });
 });
 
 describe('statusRuleToSql (fileAvailability)', () => {
@@ -1603,10 +1613,33 @@ describe('BookQueryBuilder.buildCollapseOrderBy', () => {
     expect(result).toBe('sort_title ASC NULLS LAST, r.id ASC');
   });
 
+  it('generates a custom metadata sort against the representative row', () => {
+    const result = BookQueryBuilder.buildCollapseOrderBy([{ field: 'custom:12', dir: 'desc' }], 1, new Map([[12, 'number']]));
+    expect(result).toBe(
+      '(SELECT v.value_number FROM book_custom_metadata_values v WHERE v.book_id = r.id AND v.field_id = 12) DESC NULLS LAST, r.id ASC',
+    );
+  });
+
+  it('skips custom metadata sorts whose field no longer resolves', () => {
+    const result = BookQueryBuilder.buildCollapseOrderBy([{ field: 'custom:12', dir: 'desc' }], 1, new Map());
+    expect(result).toBe('sort_title ASC NULLS LAST, r.id ASC');
+  });
+
+  it('does not inline a malformed custom field reference', () => {
+    const result = BookQueryBuilder.buildCollapseOrderBy([{ field: 'custom:1; DROP TABLE books' as never, dir: 'asc' }], 1, new Map([[1, 'text']]));
+    expect(result).toBe('sort_title ASC NULLS LAST, r.id ASC');
+  });
+
   it('generates readStatus sort using subquery', () => {
     const result = BookQueryBuilder.buildCollapseOrderBy([{ field: 'readStatus', dir: 'asc' }], 1);
     expect(result).toContain('user_book_status');
+    expect(result).toContain('COALESCE');
+    expect(result).toContain("'unread'");
     expect(result).toContain('ASC NULLS LAST');
+  });
+
+  it('generates language sort over the representative field', () => {
+    expect(BookQueryBuilder.buildCollapseOrderBy([{ field: 'language', dir: 'desc' }], 1)).toBe('r.language DESC NULLS LAST, r.id ASC');
   });
 
   it('generates format sort using subquery', () => {

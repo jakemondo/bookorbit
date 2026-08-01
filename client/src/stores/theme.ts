@@ -1,9 +1,22 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
-import { BACKGROUND_IDS, type Background, ACCENT_IDS, type Accent, RADIUS_IDS, type Radius, THEME_IDS, type Theme } from '@bookorbit/types'
+import { computed, onScopeDispose, ref, watch } from 'vue'
+import {
+  BACKGROUND_IDS,
+  type Background,
+  ACCENT_IDS,
+  type Accent,
+  RADIUS_IDS,
+  type Radius,
+  SURFACE_OPACITY_DEFAULT,
+  SURFACE_OPACITY_MAX,
+  SURFACE_OPACITY_MIN,
+  THEME_IDS,
+  type ResolvedTheme,
+  type Theme,
+} from '@bookorbit/types'
 import { storage } from '@/services/storage'
 
-export { ACCENT_VIVID, ACCENT_PASTEL, ACCENT_OPTIONS } from '@/lib/theme-accent-meta'
+export { ACCENT_VIVID, ACCENT_PASTEL, ACCENT_OPTIONS, ACCENT_PAIRS, ACCENT_ROWS } from '@/lib/theme-accent-meta'
 
 export const RADIUS_OPTIONS: { id: Radius; label: string }[] = [
   { id: 'sharp', label: 'Sharp' },
@@ -17,7 +30,6 @@ export const BACKGROUND_OPTIONS: { id: Background; label: string; cssClass: stri
   { id: 'none', label: 'None', cssClass: '' },
   { id: 'dots', label: 'Dots', cssClass: 'pattern-dots' },
   { id: 'cross', label: 'Cross', cssClass: 'pattern-cross' },
-  { id: 'terminal', label: 'Terminal', cssClass: 'pattern-terminal' },
   { id: 'millimeter', label: 'Millimeter', cssClass: 'pattern-millimeter' },
 
   // Structural
@@ -45,9 +57,19 @@ export const BACKGROUND_OPTIONS: { id: Background; label: string; cssClass: stri
 
 const DEFAULT_SURFACE_BRIGHTNESS = 35
 
+export function clampSurfaceOpacity(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number.NaN
+  if (!Number.isFinite(numeric)) return SURFACE_OPACITY_DEFAULT
+  return Math.min(SURFACE_OPACITY_MAX, Math.max(SURFACE_OPACITY_MIN, Math.round(numeric)))
+}
+
 export const useThemeStore = defineStore('theme', () => {
-  const storedTheme = storage.get<Theme>('theme', 'dark')
-  const theme = ref<Theme>(THEME_IDS.includes(storedTheme) ? storedTheme : 'dark')
+  const colorSchemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)')
+  const systemTheme = ref<ResolvedTheme>(colorSchemeQuery?.matches ? 'dark' : 'light')
+
+  const storedTheme = storage.get<Theme>('theme', 'system')
+  const theme = ref<Theme>(THEME_IDS.includes(storedTheme) ? storedTheme : 'system')
+  const resolvedTheme = computed<ResolvedTheme>(() => (theme.value === 'system' ? systemTheme.value : theme.value))
 
   const storedAccent = storage.get<Accent>('accent', 'blue')
   const accent = ref<Accent>(ACCENT_IDS.includes(storedAccent) ? storedAccent : 'blue')
@@ -60,8 +82,14 @@ export const useThemeStore = defineStore('theme', () => {
 
   const brightness = ref<number>(storage.get<number>('brightness', DEFAULT_SURFACE_BRIGHTNESS))
 
-  function applyTheme(t: Theme) {
+  const surfaceOpacity = ref<number>(clampSurfaceOpacity(storage.get<number>('surfaceOpacity', SURFACE_OPACITY_DEFAULT)))
+
+  function applyTheme(t: ResolvedTheme) {
     document.documentElement.classList.toggle('dark', t === 'dark')
+  }
+
+  function handleColorSchemeChange(event: MediaQueryListEvent) {
+    systemTheme.value = event.matches ? 'dark' : 'light'
   }
 
   function applyAccent(a: Accent) {
@@ -84,7 +112,7 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function toggleTheme() {
-    setTheme(theme.value === 'dark' ? 'light' : 'dark')
+    setTheme(resolvedTheme.value === 'dark' ? 'light' : 'dark')
   }
 
   function setAccent(a: Accent) {
@@ -112,10 +140,27 @@ export const useThemeStore = defineStore('theme', () => {
     brightness.value = Math.min(100, Math.max(0, b))
   }
 
+  function applySurfaceOpacity(value: number) {
+    document.documentElement.style.setProperty('--shell-surface-opacity', `${value}%`)
+  }
+
+  function setSurfaceOpacity(value: number) {
+    surfaceOpacity.value = clampSurfaceOpacity(value)
+  }
+
+  colorSchemeQuery?.addEventListener('change', handleColorSchemeChange)
+  onScopeDispose(() => colorSchemeQuery?.removeEventListener('change', handleColorSchemeChange))
+
+  watch(
+    resolvedTheme,
+    (t) => {
+      applyTheme(t)
+    },
+    { immediate: true },
+  )
   watch(
     theme,
     (t) => {
-      applyTheme(t)
       storage.set('theme', t)
     },
     { immediate: true },
@@ -152,6 +197,29 @@ export const useThemeStore = defineStore('theme', () => {
     },
     { immediate: true },
   )
+  watch(
+    surfaceOpacity,
+    (value) => {
+      applySurfaceOpacity(value)
+      storage.set('surfaceOpacity', value)
+    },
+    { immediate: true },
+  )
 
-  return { theme, accent, radius, background, brightness, setTheme, toggleTheme, setAccent, setRadius, setBackground, setBrightness }
+  return {
+    theme,
+    resolvedTheme,
+    accent,
+    radius,
+    background,
+    brightness,
+    surfaceOpacity,
+    setTheme,
+    toggleTheme,
+    setAccent,
+    setRadius,
+    setBackground,
+    setBrightness,
+    setSurfaceOpacity,
+  }
 })

@@ -5,9 +5,11 @@ import type { StringValue } from 'ms';
 
 import { AppSettingsModule } from '../app-settings/app-settings.module';
 import { AuthModule } from '../auth/auth.module';
+import { BookModule } from '../book/book.module';
 import { LibraryModule } from '../library/library.module';
 import { MetadataFetchModule } from '../metadata-fetch/metadata-fetch.module';
 import { MetadataModule } from '../metadata/metadata.module';
+import { MetadataScoreModule } from '../metadata-score/metadata-score.module';
 import { NotificationModule } from '../notification/notification.module';
 import { UploadModule } from '../upload/upload.module';
 import { BookDockController } from './book-dock.controller';
@@ -25,9 +27,11 @@ import { BookDockRepository } from './book-dock.repository';
   imports: [
     UploadModule,
     AuthModule,
+    BookModule,
     LibraryModule,
     MetadataFetchModule,
     MetadataModule,
+    MetadataScoreModule,
     forwardRef(() => NotificationModule),
     AppSettingsModule,
     JwtModule.registerAsync({

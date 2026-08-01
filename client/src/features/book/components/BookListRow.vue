@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BookCard, BookFileRef } from '@bookorbit/types'
-import { FORMAT_TO_GROUP } from '@bookorbit/types'
+import { getBookMediaProfile } from '@bookorbit/types'
 import BookCoverArtwork from './BookCoverArtwork.vue'
 import BookCoverSurface from './BookCoverSurface.vue'
 import { api } from '@/lib/api'
@@ -75,7 +75,7 @@ const collapsedCoverSurfaceClass = computed(() => [
   'book-cover-surface--spine-fitted relative shrink-0 overflow-hidden rounded-sm shadow-sm',
   collapsedCoverIsStacked.value ? '-ml-8 first:ml-0 w-12 ring-1 ring-background/80' : 'w-16',
 ])
-const collapsedCountLabel = computed(() => t('book.collapsedSeries.bookCount', { count: collapsedBookCount.value }, collapsedBookCount.value))
+const collapsedCountLabel = computed(() => t('book.collapsedSeries.bookCount', { count: collapsedBookCount.value }))
 const collapsedProgressPercent = computed(() => {
   if (collapsedBookCount.value <= 0) return 0
   return Math.min(100, Math.max(0, (collapsedReadCount.value / collapsedBookCount.value) * 100))
@@ -90,8 +90,9 @@ const seriesLine = computed(() => {
 
 const isMissing = computed(() => props.book.status === 'missing')
 const primaryFile = computed(() => props.book.files.find((f) => f.role === 'primary') ?? props.book.files[0] ?? null)
-const isAudiobook = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'audio')
-const isComic = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'cbx')
+const mediaProfile = computed(() => getBookMediaProfile(props.book.files))
+const isAudiobook = computed(() => mediaProfile.value.primaryMediaKind === 'audiobook')
+const isComic = computed(() => mediaProfile.value.primaryMediaKind === 'comic')
 const secondaryFiles = computed(() => props.book.files.filter((f) => f !== primaryFile.value))
 
 const uniqueSecondaryFiles = computed(() => {
@@ -143,7 +144,8 @@ const { coverUrl } = useCoverVersions()
 const coverSrc = computed(() => coverUrl(props.book.id, 'thumbnail', props.book.updatedAt ?? props.book.addedAt))
 
 const { refreshing, refreshWithFeedback } = useRefreshMetadata()
-const coverAspectRatio = inject(COVER_ASPECT_RATIO_KEY, ref(DEFAULT_COVER_ASPECT_RATIO))
+const injectedCoverAspectRatio = inject(COVER_ASPECT_RATIO_KEY, ref(DEFAULT_COVER_ASPECT_RATIO))
+const coverAspectRatio = computed(() => props.book.coverAspectRatio ?? injectedCoverAspectRatio.value)
 
 function openFile(file: BookFileRef, mode?: 'peek') {
   router.push({
@@ -269,7 +271,7 @@ function handleRowClick(event: MouseEvent) {
         {{ authorLine }}
       </button>
       <div class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-        <LibraryBig class="size-3.5 shrink-0 text-muted-foreground/70" />
+        <LibraryBig class="size-3.5 shrink-0 text-muted-foreground" />
         <span class="truncate">{{ collapsedCountLabel }}</span>
         <span v-if="collapsedReadCount > 0" class="shrink-0">
           &middot; {{ t('book.collapsedSeries.readCount', { count: collapsedReadCount }, collapsedReadCount) }}
@@ -285,7 +287,7 @@ function handleRowClick(event: MouseEvent) {
     </div>
 
     <div v-if="!selectionMode" class="flex shrink-0 items-center gap-2">
-      <ChevronRight class="size-4 text-muted-foreground/60 transition-colors" />
+      <ChevronRight class="size-4 text-muted-foreground transition-colors" />
     </div>
   </div>
   <div

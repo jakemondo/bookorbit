@@ -50,7 +50,7 @@ const { viewMode, effectiveViewMode } = useEffectiveViewMode()
 const { hasPermission, isDemoRestrictedAccount } = usePermissions()
 
 const collectionId = shallowRef(Number(route.params.id))
-const { tableDensity } = useDisplaySettings()
+const { tableDensity, showJumpRails } = useDisplaySettings()
 const { allSavedViews, saveView, renameView, deleteView, duplicateView, toggleFavorite, importViews } = useSavedViews('collection', collectionId)
 const coverAspectRatio = computed(() => DEFAULT_COVER_ASPECT_RATIO)
 const { coverSize, gridGap } = useViewDisplaySettings('collection', collectionId, coverAspectRatio)
@@ -75,6 +75,7 @@ watch(prefs, () => {
 })
 
 const { searchQuery, debouncedQuery, clearSearch } = useViewSearch()
+const mainRef = ref<HTMLElement | null>(null)
 
 const {
   booksProxy: books,
@@ -94,6 +95,9 @@ const {
   handleJump,
   buckets,
   bucketKind,
+  primarySortField,
+  temporalGranularity,
+  railCapacity,
   refreshBuckets,
   railVisible,
   activeBucketKey,
@@ -105,11 +109,12 @@ const {
   listEndpoint: (id) => `/api/v1/collections/${id}/books/query`,
   bucketsEndpoint: (id) => `/api/v1/collections/${id}/books/jump-buckets`,
   viewMode: effectiveViewMode,
+  railEnabled: showJumpRails,
+  railViewport: mainRef,
   collapseEnabled: collapseEnabledRef,
   q: debouncedQuery,
 })
 const { sortModel: tableSortModel } = useViewSort(tableSort, 'collection', collectionId)
-const mainRef = ref<HTMLElement | null>(null)
 useScrollRestoreOnActivate(mainRef)
 const collectionLoadError = computed(() => collectionsError.value ?? booksError.value)
 const { setBookContext } = useBookNavigation()
@@ -234,7 +239,7 @@ async function handleRemoveFromCollection() {
     resetBooks()
     refreshBuckets()
     exitSelectionMode()
-    toast.success(t('views.collection.toast.removed', { count: ids.length }, ids.length))
+    toast.success(t('views.collection.toast.removed', { count: ids.length }))
   } catch {
     toast.error(t('views.collection.toast.removeFailed'))
   } finally {
@@ -434,6 +439,8 @@ defineOptions({ name: 'CollectionView' })
         :total="total"
         v-model:coverSize="coverSize"
         v-model:gridGap="gridGap"
+        :show-jump-rail-toggle="true"
+        v-model:showJumpRails="showJumpRails"
         v-model:viewMode="viewMode"
         :selection-mode="selectionMode"
         :searchable="true"
@@ -534,14 +541,14 @@ defineOptions({ name: 'CollectionView' })
 
       <section v-if="mobileControlsExpanded" class="mb-3 rounded-lg border border-border/70 bg-card/70 p-2 sm:hidden">
         <div class="mb-2 flex h-9 items-center rounded-md border border-input bg-background px-2.5">
-          <Search :size="13" class="mr-1.5 shrink-0 text-muted-foreground/85" />
+          <Search :size="13" class="mr-1.5 shrink-0 text-muted-foreground" />
           <input
             v-model="searchQuery"
             type="search"
             :placeholder="t('views.bookView.searchPlaceholder')"
-            class="mobile-search-input h-full w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/85"
+            class="mobile-search-input h-full w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
-          <button v-if="searchQuery.trim()" class="ml-1 text-muted-foreground/85 transition-colors hover:text-foreground" @click="clearSearch">
+          <button v-if="searchQuery.trim()" class="ml-1 text-muted-foreground transition-colors hover:text-foreground" @click="clearSearch">
             <X :size="12" />
           </button>
         </div>
@@ -592,7 +599,7 @@ defineOptions({ name: 'CollectionView' })
 
         <div v-else-if="booksInitialized && !loading && books.length === 0" class="flex flex-col items-center justify-center gap-3 py-24 text-center">
           <div class="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
-            <FolderOpen :size="28" class="text-muted-foreground/70" />
+            <FolderOpen :size="28" class="text-muted-foreground" />
           </div>
           <p class="text-sm font-medium text-foreground">
             {{ debouncedQuery ? t('views.collection.empty.noSearchMatch') : t('views.collection.empty.noBooks') }}
@@ -611,6 +618,7 @@ defineOptions({ name: 'CollectionView' })
           :selection-mode="selectionMode"
           :is-selected="isSelected"
           :rail-gutter="railGutterReserved"
+          :rail-gutter-kind="bucketKind"
           @range="handleRange"
           @first-visible-index="handleFirstVisibleIndex"
           @action="handleBookAction"
@@ -664,6 +672,10 @@ defineOptions({ name: 'CollectionView' })
           :visible="railVisible"
           :buckets="buckets"
           :kind="bucketKind ?? 'letter'"
+          :field="primarySortField"
+          :granularity="temporalGranularity"
+          :max-slots="railCapacity"
+          :viewport="mainRef"
           :active-key="activeBucketKey"
           :template="bucketKind === 'letter' ? letterTemplate : undefined"
           @jump="handleJump"

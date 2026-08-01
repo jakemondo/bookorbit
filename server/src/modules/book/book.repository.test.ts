@@ -1,4 +1,7 @@
 import { BookRepository } from './book.repository';
+import { sql } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { bookMetadata, books } from '../../db/schema';
 
 function makeSelectChain<T>(terminalMethod: string, terminalResult: T) {
   const chain: Record<string, vi.Mock> = {
@@ -53,6 +56,24 @@ describe('BookRepository', () => {
 
     await expect(repo.withTransaction((tx: { id: string }) => Promise.resolve(`seen-${tx.id}`))).resolves.toBe('seen-tx-1');
     expect(db.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads book titles for deletion audit details', async () => {
+    const rows = [
+      { id: 3, title: 'Dune' },
+      { id: 4, title: null },
+    ];
+    const selectChain = makeSelectChain('where', rows);
+    const db = {
+      select: vi.fn().mockReturnValue(selectChain),
+    };
+    const repo = new BookRepository(db as never);
+
+    await expect(repo.findDeletionAuditBooksByIds([3, 4])).resolves.toEqual(rows);
+    await expect(repo.findDeletionAuditBooksByIds([])).resolves.toEqual([]);
+
+    expect(db.select).toHaveBeenCalledTimes(1);
+    expect(selectChain.leftJoin).toHaveBeenCalledTimes(1);
   });
 
   it('findCards loads card rows and related collections for the current user', async () => {
@@ -208,6 +229,26 @@ describe('BookRepository', () => {
     });
   });
 
+  it('findIdsByWhere joins metadata before applying selection predicates', async () => {
+    const rows = [{ id: 10 }, { id: 11 }];
+    const chain = makeSelectChain('where', rows);
+    const db = { select: vi.fn().mockReturnValue(chain) };
+    const repo = new BookRepository(db as never);
+
+    const result = await repo.findIdsByWhere(sql`${bookMetadata.title} is not null`);
+
+    expect(chain.from).toHaveBeenCalledWith(books);
+    expect(chain.leftJoin).toHaveBeenCalledWith(bookMetadata, expect.anything());
+
+    const dialect = new PgDialect();
+    const joinSql = dialect.sqlToQuery(chain.leftJoin.mock.calls[0]![1]).sql;
+    const whereSql = dialect.sqlToQuery(chain.where.mock.calls[0]![0]).sql;
+    expect(joinSql).toBe('"book_metadata"."book_id" = "books"."id"');
+    expect(whereSql).toContain('"book_metadata"."title" is not null');
+    expect(whereSql).toContain('"books"."status" <>');
+    expect(result).toEqual([10, 11]);
+  });
+
   it('fetches per-book and per-file progress helpers with null-safe fallbacks', async () => {
     const findCollectionsChain = makeSelectChain('orderBy', [{ id: 1, name: 'Favorites' }]);
     const libraryIdChain = makeSelectChain('limit', [{ libraryId: 5 }]);
@@ -299,8 +340,8 @@ describe('BookRepository', () => {
 
   it('maps hasCover from coverSource and aggregates authors per book in recommendation rows', async () => {
     const bookRows = [
-      { id: 10, title: 'Dune', coverSource: 'extracted', primaryFormat: 'm4b' },
-      { id: 11, title: 'Foundation', coverSource: null, primaryFormat: 'epub' },
+      { id: 10, title: 'Dune', coverAspectRatio: '2/3', coverSource: 'extracted', primaryFormat: 'm4b' },
+      { id: 11, title: 'Foundation', coverAspectRatio: '1/1', coverSource: null, primaryFormat: 'epub' },
     ];
     const authorRows = [
       { bookId: 10, name: 'Frank Herbert' },
@@ -315,10 +356,20 @@ describe('BookRepository', () => {
     const result = await repo.findRecommendationTitlesByBookIds([10, 11]);
 
     expect(result).toEqual([
-      { id: 10, title: 'Dune', updatedAt: null, hasCover: true, authors: ['Frank Herbert'], isAudiobook: true, isComic: false },
+      {
+        id: 10,
+        title: 'Dune',
+        coverAspectRatio: '2/3',
+        updatedAt: null,
+        hasCover: true,
+        authors: ['Frank Herbert'],
+        isAudiobook: true,
+        isComic: false,
+      },
       {
         id: 11,
         title: 'Foundation',
+        coverAspectRatio: '1/1',
         updatedAt: null,
         hasCover: false,
         authors: ['Isaac Asimov', 'Robert Heinlein'],
@@ -329,7 +380,7 @@ describe('BookRepository', () => {
   });
 
   it('returns hasCover false when coverSource is null in recommendation rows', async () => {
-    const bookRows = [{ id: 5, title: 'No Cover', coverSource: null, primaryFormat: null }];
+    const bookRows = [{ id: 5, title: 'No Cover', coverAspectRatio: '2/3', coverSource: null, primaryFormat: null }];
     const db = {
       select: vi.fn().mockReturnValueOnce(makeSelectChain('where', bookRows)).mockReturnValueOnce(makeSelectChain('where', [])),
     };
@@ -337,11 +388,13 @@ describe('BookRepository', () => {
 
     const result = await repo.findRecommendationTitlesByBookIds([5]);
 
-    expect(result).toEqual([{ id: 5, title: 'No Cover', updatedAt: null, hasCover: false, authors: [], isAudiobook: false, isComic: false }]);
+    expect(result).toEqual([
+      { id: 5, title: 'No Cover', coverAspectRatio: '2/3', updatedAt: null, hasCover: false, authors: [], isAudiobook: false, isComic: false },
+    ]);
   });
 
   it('treats primary format checks as case-insensitive in recommendation rows', async () => {
-    const bookRows = [{ id: 6, title: 'Audio Case', coverSource: 'custom', primaryFormat: 'MP3' }];
+    const bookRows = [{ id: 6, title: 'Audio Case', coverAspectRatio: '2/3', coverSource: 'custom', primaryFormat: 'MP3' }];
     const db = {
       select: vi.fn().mockReturnValueOnce(makeSelectChain('where', bookRows)).mockReturnValueOnce(makeSelectChain('where', [])),
     };
@@ -349,11 +402,13 @@ describe('BookRepository', () => {
 
     const result = await repo.findRecommendationTitlesByBookIds([6]);
 
-    expect(result).toEqual([{ id: 6, title: 'Audio Case', updatedAt: null, hasCover: true, authors: [], isAudiobook: true, isComic: false }]);
+    expect(result).toEqual([
+      { id: 6, title: 'Audio Case', coverAspectRatio: '2/3', updatedAt: null, hasCover: true, authors: [], isAudiobook: true, isComic: false },
+    ]);
   });
 
   it('flags comic primary formats as isComic in recommendation rows', async () => {
-    const bookRows = [{ id: 8, title: 'Comic Case', coverSource: 'custom', primaryFormat: 'CBR' }];
+    const bookRows = [{ id: 8, title: 'Comic Case', coverAspectRatio: '1/1', coverSource: 'custom', primaryFormat: 'CBR' }];
     const db = {
       select: vi.fn().mockReturnValueOnce(makeSelectChain('where', bookRows)).mockReturnValueOnce(makeSelectChain('where', [])),
     };
@@ -361,12 +416,14 @@ describe('BookRepository', () => {
 
     const result = await repo.findRecommendationTitlesByBookIds([8]);
 
-    expect(result).toEqual([{ id: 8, title: 'Comic Case', updatedAt: null, hasCover: true, authors: [], isAudiobook: false, isComic: true }]);
+    expect(result).toEqual([
+      { id: 8, title: 'Comic Case', coverAspectRatio: '1/1', updatedAt: null, hasCover: true, authors: [], isAudiobook: false, isComic: true },
+    ]);
   });
 
   it('maps id-list helper rows and primary-file lookups', async () => {
     const libraryRows = [{ id: 1, libraryId: 7 }];
-    const recommendationBookRows = [{ id: 1, title: 'Dune', coverSource: 'extracted', primaryFormat: 'm4b' }];
+    const recommendationBookRows = [{ id: 1, title: 'Dune', coverAspectRatio: '2/3', coverSource: 'extracted', primaryFormat: 'm4b' }];
     const recommendationAuthorRows = [{ bookId: 1, name: 'Frank Herbert' }];
     const allIdsRows = [{ id: 3 }, { id: 4 }];
     const primaryFileRows = [{ absolutePath: '/books/a.epub', format: 'epub' }];
@@ -392,7 +449,16 @@ describe('BookRepository', () => {
 
     await expect(repo.findLibraryIdsByBookIds([1])).resolves.toEqual(libraryRows);
     await expect(repo.findRecommendationTitlesByBookIds([1])).resolves.toEqual([
-      { id: 1, title: 'Dune', updatedAt: null, hasCover: true, authors: ['Frank Herbert'], isAudiobook: true, isComic: false },
+      {
+        id: 1,
+        title: 'Dune',
+        coverAspectRatio: '2/3',
+        updatedAt: null,
+        hasCover: true,
+        authors: ['Frank Herbert'],
+        isAudiobook: true,
+        isComic: false,
+      },
     ]);
     await expect(repo.findPrimaryFilesByBookIds([1])).resolves.toEqual(primaryFilesByIds);
     await expect(repo.findAllFilesByBookIds([1])).resolves.toEqual(allFilesByIds);
@@ -706,7 +772,7 @@ describe('BookRepository', () => {
     const db = {
       select: vi
         .fn()
-        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub' }]))
+        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub', markAsFinishedPercentComplete: 98 }]))
         .mockReturnValueOnce(
           makeSelectChain('limit', [
             {
@@ -773,7 +839,7 @@ describe('BookRepository', () => {
     const db = {
       select: vi
         .fn()
-        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub' }]))
+        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub', markAsFinishedPercentComplete: 98 }]))
         .mockReturnValueOnce(
           makeSelectChain('limit', [
             {
@@ -822,7 +888,7 @@ describe('BookRepository', () => {
     const db = {
       select: vi
         .fn()
-        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub' }]))
+        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub', markAsFinishedPercentComplete: 98 }]))
         .mockReturnValueOnce(makeSelectChain('limit', [existingState])),
       insert: vi.fn().mockReturnValue(insertChain),
       execute: vi.fn().mockResolvedValue(undefined),
@@ -849,7 +915,7 @@ describe('BookRepository', () => {
     const db = {
       select: vi
         .fn()
-        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub' }]))
+        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub', markAsFinishedPercentComplete: 98 }]))
         .mockReturnValueOnce(makeSelectChain('limit', [existingState])),
       insert: vi.fn(),
       execute: vi.fn(),
@@ -864,7 +930,9 @@ describe('BookRepository', () => {
 
   it('does not sync Kobo reading state for non-primary EPUB files', async () => {
     const db = {
-      select: vi.fn().mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 99, format: 'epub' }])),
+      select: vi
+        .fn()
+        .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 99, format: 'epub', markAsFinishedPercentComplete: 98 }])),
       insert: vi.fn(),
       execute: vi.fn(),
     };
@@ -874,6 +942,45 @@ describe('BookRepository', () => {
 
     expect(db.insert).not.toHaveBeenCalled();
     expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  describe('Kobo status derived from the library finished threshold', () => {
+    async function syncStatusFor(percentage: number, markAsFinishedPercentComplete: unknown): Promise<string> {
+      const insertChain = makeInsertChain();
+      const db = {
+        select: vi
+          .fn()
+          .mockReturnValueOnce(makeSelectChain('limit', [{ bookId: 10, primaryFileId: 9, format: 'epub', markAsFinishedPercentComplete }]))
+          .mockReturnValueOnce(makeSelectChain('limit', [])),
+        insert: vi.fn().mockReturnValue(insertChain),
+        execute: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await new BookRepository(db as never).syncKoboReadingStateFromProgress(5, 9, percentage);
+
+      return (insertChain.values.mock.calls[0][0] as { statusInfo: { Status: string } }).statusInfo.Status;
+    }
+
+    it.each([
+      { percentage: 0, threshold: 98, expected: 'ReadyToRead' },
+      { percentage: 40, threshold: 98, expected: 'Reading' },
+      { percentage: 97.5, threshold: 98, expected: 'Reading' },
+      { percentage: 98, threshold: 98, expected: 'Finished' },
+      { percentage: 100, threshold: 98, expected: 'Finished' },
+      { percentage: 95, threshold: 95, expected: 'Finished' },
+      { percentage: 99, threshold: 100, expected: 'Reading' },
+    ])('reports $expected at $percentage% with a $threshold% threshold', async ({ percentage, threshold, expected }) => {
+      await expect(syncStatusFor(percentage, threshold)).resolves.toBe(expected);
+    });
+
+    it('never reports an unread book as finished when the threshold is zero', async () => {
+      await expect(syncStatusFor(0, 0)).resolves.toBe('ReadyToRead');
+    });
+
+    it('requires full completion when the threshold is unusable', async () => {
+      await expect(syncStatusFor(98, null)).resolves.toBe('Reading');
+      await expect(syncStatusFor(100, null)).resolves.toBe('Finished');
+    });
   });
 
   it('reads whether Kobo two-way progress sync is enabled', async () => {
@@ -903,6 +1010,154 @@ describe('BookRepository', () => {
     expect(del).toHaveBeenCalledTimes(2);
     expect(readingWhere).toHaveBeenCalledTimes(1);
     expect(audioWhere).toHaveBeenCalledTimes(1);
+  });
+
+  describe('temporal jump buckets', () => {
+    const dialect = new PgDialect();
+
+    it('maps bounded temporal groups and the unknown tail without a full row sort', async () => {
+      const execute = vi.fn().mockResolvedValue({
+        rows: [
+          { bucket: '2026-07', item_index: 0, total: 100_000, is_unknown: false, unit: 'month', step: 1 },
+          { bucket: '__unknown__', item_index: 99_900, total: 100_000, is_unknown: true, unit: 'month', step: 1 },
+        ],
+      });
+      const repo = new BookRepository({ execute } as never);
+
+      const result = await repo.findTemporalJumpBuckets({
+        where: undefined,
+        field: 'addedAt',
+        direction: 'desc',
+        precision: 'date',
+        userId: 7,
+        timeZone: 'America/Denver',
+        maxBuckets: 24,
+      });
+
+      expect(result).toEqual({
+        buckets: [
+          { key: '2026-07', label: '2026-07', index: 0 },
+          { key: '__unknown__', label: '__unknown__', index: 99_900, isUnknown: true },
+        ],
+        total: 100_000,
+        kind: 'temporal',
+        granularity: { unit: 'month', step: 1 },
+      });
+      const query = dialect.sqlToQuery(execute.mock.calls[0]![0]).sql;
+      expect(query).toContain('temporal_rows AS MATERIALIZED');
+      expect(query).toContain('known_capacity');
+      expect(query).toContain('ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING');
+      expect(query).not.toContain('ROW_NUMBER()');
+    });
+
+    it('pre-aggregates per-user last-read values before collapsing series', async () => {
+      const execute = vi.fn().mockResolvedValue({ rows: [] });
+      const repo = new BookRepository({ execute } as never);
+
+      await repo.findTemporalJumpBucketsCollapsed({
+        where: undefined,
+        field: 'lastReadAt',
+        direction: 'asc',
+        precision: 'date',
+        userId: 9,
+        timeZone: 'UTC',
+        maxBuckets: 32,
+      });
+
+      const query = dialect.sqlToQuery(execute.mock.calls[0]![0]).sql;
+      expect(query).toContain('rail_last_read AS MATERIALIZED');
+      expect(query).toContain('GROUP BY rail_bf.book_id');
+      expect(query).toContain('base_rows AS MATERIALIZED');
+      expect(query).toContain('representatives AS');
+      expect(query).not.toContain('SELECT max(rp.updated_at)');
+    });
+  });
+
+  describe('discrete jump buckets', () => {
+    const dialect = new PgDialect();
+
+    it('maps bounded categorical groups and unknown values', async () => {
+      const execute = vi.fn().mockResolvedValue({
+        rows: [
+          { bucket: 'en', item_index: 0, total: 100_000, is_unknown: false },
+          { bucket: '__unknown__', item_index: 90_000, total: 100_000, is_unknown: true },
+        ],
+      });
+      const repo = new BookRepository({ execute } as never);
+
+      const result = await repo.findJumpBuckets({
+        where: undefined,
+        field: 'language',
+        kind: 'category',
+        userId: 7,
+        maxBuckets: 24,
+        orderBy: [sql`book_metadata.language ASC NULLS LAST`],
+      });
+
+      expect(result).toEqual({
+        buckets: [
+          { key: 'en', label: 'en', index: 0 },
+          { key: '__unknown__', label: '__unknown__', index: 90_000, isUnknown: true },
+        ],
+        total: 100_000,
+        kind: 'category',
+        granularity: null,
+      });
+      const query = dialect.sqlToQuery(execute.mock.calls[0]![0]).sql;
+      expect(query).toContain('ordered AS MATERIALIZED');
+      expect(query).toContain('bucket_count');
+      expect(query).toContain('LIMIT');
+    });
+
+    it('joins primary formats and per-user statuses once instead of correlating each row', async () => {
+      const execute = vi.fn().mockResolvedValue({ rows: [] });
+      const repo = new BookRepository({ execute } as never);
+
+      await repo.findJumpBuckets({
+        where: undefined,
+        field: 'format',
+        kind: 'category',
+        userId: 9,
+        maxBuckets: 32,
+        orderBy: [sql`books.id ASC`],
+      });
+      const formatQuery = dialect.sqlToQuery(execute.mock.calls[0]![0]).sql;
+      expect(formatQuery).toContain('LEFT JOIN "book_files" rail_primary_file');
+      expect(formatQuery).not.toContain('SELECT bf.format');
+
+      await repo.findJumpBuckets({
+        where: undefined,
+        field: 'readStatus',
+        kind: 'category',
+        userId: 9,
+        maxBuckets: 32,
+        orderBy: [sql`books.id ASC`],
+      });
+      const statusQuery = dialect.sqlToQuery(execute.mock.calls[1]![0]).sql;
+      expect(statusQuery).toContain('LEFT JOIN "user_book_status" rail_ubs');
+      expect(statusQuery).toContain('rail_ubs.user_id =');
+      expect(statusQuery).not.toContain('SELECT ubs.status');
+    });
+
+    it('carries categorical values through the collapsed representative query', async () => {
+      const execute = vi.fn().mockResolvedValue({ rows: [] });
+      const repo = new BookRepository({ execute } as never);
+
+      await repo.findJumpBucketsCollapsed({
+        where: undefined,
+        field: 'readStatus',
+        kind: 'category',
+        sort: [{ field: 'readStatus', dir: 'asc' }],
+        userId: 9,
+        maxBuckets: 32,
+      });
+
+      const query = dialect.sqlToQuery(execute.mock.calls[0]![0]).sql;
+      expect(query).toContain('base_rows AS MATERIALIZED');
+      expect(query).toContain("coalesce(rail_ubs.status::text, 'unread') AS rail_discrete_value");
+      expect(query).toContain('base.rail_discrete_value');
+      expect(query).toContain('r.rail_discrete_value');
+    });
   });
 
   describe('bulkSetRating', () => {

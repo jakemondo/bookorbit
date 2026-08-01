@@ -78,6 +78,7 @@ const libraryId = shallowRef<number | null>(route.params.id ? Number(route.param
 const currentLibrary = computed(() => libraries.value.find((l) => l.id === libraryId.value))
 const currentCoverAspectRatio = computed(() => currentLibrary.value?.coverAspectRatio ?? DEFAULT_COVER_ASPECT_RATIO)
 const { coverSize, gridGap } = useViewDisplaySettings('library', libraryId, currentCoverAspectRatio)
+const { tableDensity, showJumpRails } = useDisplaySettings()
 
 const libraryNotFound = computed(() => librariesLoaded.value && libraryId.value !== null && !currentLibrary.value)
 const title = computed(() => currentLibrary.value?.name ?? t('views.library.title'))
@@ -102,6 +103,7 @@ watch(prefs, () => {
 })
 
 const { searchQuery, debouncedQuery, clearSearch } = useViewSearch()
+const mainRef = ref<HTMLElement | null>(null)
 
 const {
   booksProxy: books,
@@ -123,6 +125,9 @@ const {
   handleJump,
   buckets,
   bucketKind,
+  primarySortField,
+  temporalGranularity,
+  railCapacity,
   refreshBuckets,
   railVisible,
   activeBucketKey,
@@ -134,11 +139,12 @@ const {
   listEndpoint: (id) => `/api/v1/libraries/${id}/books`,
   bucketsEndpoint: (id) => `/api/v1/libraries/${id}/books/jump-buckets`,
   viewMode: effectiveViewMode,
+  railEnabled: showJumpRails,
+  railViewport: mainRef,
   collapseEnabled: collapseEnabledRef,
   q: debouncedQuery,
 })
 const { onLibraryUploadCompleted } = useLibraryUploadEvents()
-const mainRef = ref<HTMLElement | null>(null)
 useScrollRestoreOnActivate(mainRef)
 const { setBookContext } = useBookNavigation()
 useBookViewContext(slots, total, loadMorePrefix)
@@ -153,7 +159,6 @@ const hasSavedFilter = computed(() => savedFilter.value !== undefined)
 const isFilterSaved = computed(() => JSON.stringify(filter.value) === JSON.stringify(savedFilter.value))
 
 const { sortModel, isDefaultSort, sortSummary, resetSort } = useViewSort(sort, 'library', libraryId)
-const { tableDensity } = useDisplaySettings()
 const { allSavedViews, saveView, renameView, deleteView, duplicateView, toggleFavorite, importViews } = useSavedViews('library', libraryId)
 
 function handleSaveCurrentView(name: string) {
@@ -563,6 +568,8 @@ defineOptions({ name: 'HomeView' })
         :total="total"
         v-model:coverSize="coverSize"
         v-model:gridGap="gridGap"
+        :show-jump-rail-toggle="true"
+        v-model:showJumpRails="showJumpRails"
         v-model:viewMode="viewMode"
         :selection-mode="selectionMode"
         :searchable="true"
@@ -599,7 +606,7 @@ defineOptions({ name: 'HomeView' })
                   v-if="!isDefaultSort"
                   @click="handleResetSort"
                   :aria-label="t('common.resetSortAria')"
-                  class="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                  class="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                 >
                   <X :size="13" />
                 </button>
@@ -722,14 +729,14 @@ defineOptions({ name: 'HomeView' })
 
       <section v-if="mobileControlsExpanded" class="mb-3 space-y-2 rounded-lg border border-border/70 bg-card/70 p-2 sm:hidden">
         <div class="flex h-9 items-center rounded-md border border-input bg-background px-2.5">
-          <Search :size="13" class="mr-1.5 shrink-0 text-muted-foreground/85" />
+          <Search :size="13" class="mr-1.5 shrink-0 text-muted-foreground" />
           <input
             v-model="searchQuery"
             type="search"
             :placeholder="t('views.bookView.searchPlaceholder')"
-            class="mobile-search-input h-full w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/85"
+            class="mobile-search-input h-full w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
-          <button v-if="searchQuery.trim()" class="ml-1 text-muted-foreground/85 transition-colors hover:text-foreground" @click="clearSearch">
+          <button v-if="searchQuery.trim()" class="ml-1 text-muted-foreground transition-colors hover:text-foreground" @click="clearSearch">
             <X :size="12" />
           </button>
         </div>
@@ -759,7 +766,7 @@ defineOptions({ name: 'HomeView' })
 
           <button
             v-if="!isDefaultSort"
-            class="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:text-destructive hover:bg-destructive/10"
+            class="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive hover:bg-destructive/10"
             @click="handleResetSort"
           >
             <X :size="13" />
@@ -843,7 +850,7 @@ defineOptions({ name: 'HomeView' })
                 <button
                   v-if="hasSavedFilter"
                   @click="forgetSavedFilter"
-                  class="h-6 w-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                  class="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                 >
                   <X :size="11" />
                 </button>
@@ -885,7 +892,7 @@ defineOptions({ name: 'HomeView' })
             class="flex flex-col items-center justify-center py-24 gap-4 text-center"
           >
             <div class="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
-              <BookOpen :size="28" class="text-muted-foreground/70" />
+              <BookOpen :size="28" class="text-muted-foreground" />
             </div>
             <div v-if="libraryId !== null && isScanning(libraryId)" class="flex flex-col gap-1">
               <p class="text-sm font-medium text-foreground">{{ t('views.library.empty.scanning') }}</p>
@@ -908,6 +915,7 @@ defineOptions({ name: 'HomeView' })
             :is-selected="isSelected"
             :new-book-ids="newBookIds"
             :rail-gutter="railGutterReserved"
+            :rail-gutter-kind="bucketKind"
             @range="handleRange"
             @first-visible-index="handleFirstVisibleIndex"
             @action="handleBookAction"
@@ -966,6 +974,10 @@ defineOptions({ name: 'HomeView' })
             :visible="railVisible"
             :buckets="buckets"
             :kind="bucketKind ?? 'letter'"
+            :field="primarySortField"
+            :granularity="temporalGranularity"
+            :max-slots="railCapacity"
+            :viewport="mainRef"
             :active-key="activeBucketKey"
             :template="bucketKind === 'letter' ? letterTemplate : undefined"
             @jump="handleJump"
