@@ -190,7 +190,7 @@ function finalizeContext(ctx) {
 
 module.exports = {
   branches: ["main"],
-  repositoryUrl: `https://github.com/${process.env.GITHUB_REPOSITORY || "jakemondo/bookorbit"}.git`,
+  repositoryUrl: "https://github.com/jakemondo/bookorbit",
   tagFormat: "v${version}",
   plugins: [
     [
