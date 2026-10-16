@@ -231,6 +231,12 @@ module.exports = {
     // "## Highlights" section (see docs/whats-new-authoring-guide.md) before it
     // goes public, then click "Publish release". The git tag and Docker images
     // are still produced; BookOrbit hides draft releases until they are published.
-    ["@semantic-release/github", { draftRelease: true }],
+    ["@semantic-release/github", { 
+      draftRelease: true,
+      successComment: false,
+      failComment: false,
+      failTitle: false,
+      releasedLabels: false,
+     }],
   ],
 };
