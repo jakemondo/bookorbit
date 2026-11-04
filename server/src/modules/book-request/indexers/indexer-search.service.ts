@@ -26,6 +26,7 @@ import { IndexerSearchException, type ReleaseCandidate, type ReleaseQuery, type 
 import { IndexerConfigService } from './indexer-config.service';
 import { IndexerOperationLock } from './indexer-operation-lock';
 import { IndexerRegistry } from './indexer-registry';
+import { indexerSecrets, withSafeInfoUrl } from './release-info-url';
 import { rejectRelease, scoreRelease, toReleaseItem, type ScoredRelease, type ScoringRequest } from './release-scoring';
 import { buildSearchText } from './search-text';
 
@@ -427,7 +428,10 @@ export class IndexerSearchService {
           () => new IndexerSearchException('timeout', `${config.name} did not answer in time`),
         );
       }
-      return { config, releases, query: indexerQuery };
+      // Vetted here rather than in each adapter, so a plugin is held to the same rule as the
+      // built-ins and a candidate refreshed for a grab is held to it a second time.
+      const secrets = indexerSecrets(config);
+      return { config, releases: releases.map((release) => withSafeInfoUrl(release, secrets)), query: indexerQuery };
     } catch (error) {
       const failure: IndexerSearchFailure = error instanceof IndexerSearchException ? error.failure : 'error';
       const message = error instanceof Error ? error.message : String(error);
@@ -498,10 +502,13 @@ function prepareScoringRequest(
   const requestIdentifiers = bookRequestSearchIsbns(request);
   const activeIsbn = overrides?.isbn !== undefined ? overrides.isbn : (requestIdentifiers[0] ?? null);
   const availableIsbns = activeIsbn && !requestIdentifiers.includes(activeIsbn) ? [activeIsbn, ...requestIdentifiers] : requestIdentifiers;
+  const usesRequestTitle = overrides?.title === undefined;
   return {
     scoringRequest: {
       title: overrides?.title ?? request.title,
       authors: overrides?.authors ?? request.authors ?? [],
+      seriesName: usesRequestTitle ? request.seriesName : null,
+      seriesIndex: usesRequestTitle ? request.seriesIndex : null,
       isbn13: activeIsbn,
       isbn10: null,
       isbns: activeIsbn ? [activeIsbn] : [],

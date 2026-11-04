@@ -101,6 +101,7 @@ export function setOnAuthFailure(fn: () => void): void {
  * `fetch` rejects these with a `TypeError` whose message is the browser's own untranslated English,
  * "Failed to fetch", and plenty of call sites render `reason.message` straight into a toast. The
  * rejection is retagged here, at the one place every request passes through, so no caller can leak it.
+ * Session checks also raise it for a status that only means the server could not answer.
  */
 export class NetworkError extends Error {
   /** The browser's own wording. Useful in a log line, never in the interface. */
@@ -111,6 +112,15 @@ export class NetworkError extends Error {
     this.name = 'NetworkError'
     this.browserMessage = browserMessage
   }
+}
+
+/**
+ * A status that says nothing about the session: the server is restarting, or a proxy with nothing
+ * behind it answered instead (the Vite dev proxy reports a refused connection as a bare 500).
+ * Reading one of these as "signed out" strands a signed-in reader on the login page.
+ */
+export function isServerUnavailableStatus(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429
 }
 
 /**
@@ -156,6 +166,9 @@ export async function fetchWithAuthProxyRecovery(input: RequestInfo | URL, init?
 async function rawFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   if (_accessToken) headers.set('Authorization', `Bearer ${_accessToken}`)
+  // Text the server writes (achievement names, the monthly challenge) follows the language picked
+  // in Settings, not the browser's, so the page never mixes two.
+  if (!headers.has('Accept-Language')) headers.set('Accept-Language', i18n.global.locale.value)
   try {
     return await fetchWithAuthProxyRecovery(input, { ...init, headers, credentials: 'include' })
   } catch (reason) {
@@ -166,7 +179,7 @@ async function rawFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
 
 async function attemptRefresh(): Promise<string> {
   const res = await rawFetch('/api/v1/auth/refresh', { method: 'POST' })
-  if (!res.ok) throw new Error('refresh failed')
+  if (!res.ok) throw isServerUnavailableStatus(res.status) ? new NetworkError(`refresh answered ${res.status}`) : new Error('refresh failed')
   const data: RefreshResponse = await res.json()
   const recovered = _sawAuthFailure
   setAccessToken(data.accessToken)
@@ -201,7 +214,9 @@ export async function api(input: RequestInfo | URL, init?: RequestInit & { _isRe
 
   try {
     await refreshAccessToken()
-  } catch {
+  } catch (reason) {
+    // The refresh never got an answer, so the session may well be intact. Keep it.
+    if (reason instanceof NetworkError) throw reason
     _onAuthFailure?.()
     throw new Error('Session expired')
   }

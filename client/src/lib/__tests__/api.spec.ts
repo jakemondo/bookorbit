@@ -10,6 +10,7 @@ import {
   setAccessToken,
   setOnAuthFailure,
 } from '@/lib/api'
+import { setI18nLocale } from '@/i18n'
 
 /** A token shaped like a real JWT, so the client can read `exp` out of it. Never verified here. */
 function signedToken(expiresInSeconds: number): string {
@@ -106,6 +107,84 @@ describe('api wrapper', () => {
     setOnAuthFailure(onFail)
     await expect(api('/api/v1/books/1')).rejects.toThrow('Session expired')
     expect(onFail).toHaveBeenCalledTimes(1)
+  })
+
+  describe('server unavailable during a refresh', () => {
+    it.each([500, 502, 503, 504, 429])('keeps the session when the refresh after a 401 is answered with %i', async (status) => {
+      globalThis.fetch = vi.fn<typeof fetch>((input: RequestInfo | URL) =>
+        Promise.resolve(new Response('', { status: urlOf(input).endsWith('/api/v1/auth/refresh') ? status : 401 })),
+      ) as never
+      const onFail = vi.fn<() => void>()
+      setOnAuthFailure(onFail)
+
+      await expect(api('/api/v1/books/1')).rejects.toBeInstanceOf(NetworkError)
+      expect(onFail).not.toHaveBeenCalled()
+    })
+
+    it('keeps the session when the refresh after a 401 cannot connect at all', async () => {
+      globalThis.fetch = vi.fn<typeof fetch>((input: RequestInfo | URL) =>
+        urlOf(input).endsWith('/api/v1/auth/refresh')
+          ? Promise.reject(new TypeError('Failed to fetch'))
+          : Promise.resolve(new Response('', { status: 401 })),
+      ) as never
+      const onFail = vi.fn<() => void>()
+      setOnAuthFailure(onFail)
+
+      await expect(api('/api/v1/books/1')).rejects.toBeInstanceOf(NetworkError)
+      expect(onFail).not.toHaveBeenCalled()
+    })
+
+    it('still ends the session when the refresh is refused', async () => {
+      globalThis.fetch = vi.fn<typeof fetch>((input: RequestInfo | URL) =>
+        Promise.resolve(new Response('', { status: urlOf(input).endsWith('/api/v1/auth/refresh') ? 403 : 401 })),
+      ) as never
+      const onFail = vi.fn<() => void>()
+      setOnAuthFailure(onFail)
+
+      await expect(api('/api/v1/books/1')).rejects.toThrow('Session expired')
+      expect(onFail).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports an unavailable refresh as a NetworkError and a refused one as a plain failure', async () => {
+      globalThis.fetch = vi.fn<typeof fetch>(() => Promise.resolve(new Response('', { status: 502 }))) as never
+      await expect(refreshAccessToken()).rejects.toBeInstanceOf(NetworkError)
+
+      globalThis.fetch = vi.fn<typeof fetch>(() => Promise.resolve(new Response('', { status: 401 }))) as never
+      const refused = await refreshAccessToken().catch((reason: unknown) => reason)
+      expect(refused).toBeInstanceOf(Error)
+      expect(refused).not.toBeInstanceOf(NetworkError)
+    })
+  })
+
+  describe('language', () => {
+    afterEach(async () => {
+      await setI18nLocale('en')
+    })
+
+    it('asks for server text in the language picked in Settings', async () => {
+      const languages: (string | null)[] = []
+      globalThis.fetch = vi.fn<typeof fetch>((_input: RequestInfo | URL, init?: RequestInit) => {
+        languages.push(new Headers(init?.headers).get('Accept-Language'))
+        return Promise.resolve(new Response('', { status: 200 }))
+      }) as never
+      await setI18nLocale('nl')
+
+      await api('/api/v1/achievements')
+
+      expect(languages).toEqual(['nl'])
+    })
+
+    it('keeps an Accept-Language the caller set itself', async () => {
+      const languages: (string | null)[] = []
+      globalThis.fetch = vi.fn<typeof fetch>((_input: RequestInfo | URL, init?: RequestInit) => {
+        languages.push(new Headers(init?.headers).get('Accept-Language'))
+        return Promise.resolve(new Response('', { status: 200 }))
+      }) as never
+
+      await api('/api/v1/achievements', { headers: { 'Accept-Language': 'de' } })
+
+      expect(languages).toEqual(['de'])
+    })
   })
 
   describe('expiry awareness', () => {

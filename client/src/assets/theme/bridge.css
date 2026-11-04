@@ -42,6 +42,8 @@
   --color-volume-reading: var(--volume-reading);
   --color-volume-unread: var(--volume-unread);
   --color-volume-missing: var(--volume-missing);
+  --color-sync-meter-text: var(--sync-meter-text);
+  --color-sync-meter-audio: var(--sync-meter-audio);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -68,6 +70,8 @@
   --color-diff-ins: var(--diff-ins);
   --color-scrim: var(--scrim);
   --color-scrim-media: var(--scrim-media);
+  --color-cover-chip: var(--cover-chip);
+  --color-cover-chip-foreground: var(--cover-chip-foreground);
   --color-path-dim: var(--path-dim);
   --color-path-fold: var(--path-fold);
 

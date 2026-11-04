@@ -1,7 +1,7 @@
-ARG NODE_IMAGE=node:26.11.1-alpine3.23@sha256:f1394b3ffc021bc3f4aaf363e70a8d9667f7a9a63538bc824d7cc583129fffad
+ARG NODE_IMAGE=node:26.12.1-alpine3.23@sha256:bc2b334006f15c7167bbeb2f08f28c2df883f7594a0470e04454ebe7560cfe68
 
 FROM ${NODE_IMAGE} AS base
-RUN npm install -g pnpm@11.22.0
+RUN npm install -g pnpm@11.28.9
 
 # Stage 1: Build client
 FROM base AS client-builder
@@ -58,7 +58,7 @@ COPY server/requirements/kobo-cloudscraper.txt /tmp/kobo-cloudscraper-requiremen
 # pip is build-only here. Leaving it installed also leaves pip/_vendor/vendor.txt,
 # which Trivy reads as installed msgpack and setuptools and fails the image scan on.
 RUN apk upgrade --no-cache && \
-    apk add --no-cache poppler-utils djvulibre util-linux su-exec ffmpeg python3 py3-pip tini tzdata && \
+    apk add --no-cache 'libexpat>=2.9.0-r0' poppler-utils djvulibre util-linux su-exec ffmpeg python3 py3-pip tini tzdata && \
     python3 -m venv /opt/bookorbit-python && \
     /opt/bookorbit-python/bin/python -m pip install --no-cache-dir -r /tmp/kobo-cloudscraper-requirements.txt && \
     /opt/bookorbit-python/bin/python -m pip uninstall -y pip && \
@@ -71,6 +71,8 @@ ENV PORT=3000
 
 COPY --from=server-builder --chown=node:node /deploy ./
 COPY --from=client-builder --chown=node:node /app/client/dist ./public
+# The server reads its own translated text (achievements, monthly challenges) from the web's catalogs.
+COPY --from=client-builder --chown=node:node /app/client/src/locales ./locales
 COPY --from=server-builder --chown=node:node /app/server/entrypoint.sh /app/server/file-env.sh ./
 COPY --chown=node:node LICENSE NOTICE ADDITIONAL_TERMS.md ./
 COPY --chown=node:node server/bin/kepubify/ ./bin/kepubify/

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, eq, exists, or, sql } from 'drizzle-orm';
+import { type SQL, and, count, eq, exists, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { ContentFilterRules } from '@bookorbit/types';
 
@@ -15,14 +15,11 @@ export class OpdsCollectionRepository {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   findById(id: number) {
-    return this.db
-      .select({ userId: collections.userId, isPublic: collections.isPublic, mediaType: collections.mediaType })
-      .from(collections)
-      .where(eq(collections.id, id))
-      .limit(1);
+    return this.db.select({ userId: collections.userId, isPublic: collections.isPublic }).from(collections).where(eq(collections.id, id)).limit(1);
   }
 
-  findVisibleForUser(userId: number, isSuperuser: boolean, contentFilters?: ContentFilterRules) {
+  // bookClauses narrow which member books a collection's count includes, never which collections list.
+  findVisibleForUser(userId: number, isSuperuser: boolean, contentFilters?: ContentFilterRules, bookClauses: SQL[] = []) {
     const libraryAccess = isSuperuser
       ? undefined
       : exists(
@@ -37,7 +34,7 @@ export class OpdsCollectionRepository {
       .select({ id: collections.id, name: collections.name, bookCount: sql<number>`count(${books.id})::int` })
       .from(collections)
       .leftJoin(collectionBooks, eq(collectionBooks.collectionId, collections.id))
-      .leftJoin(books, and(eq(books.id, collectionBooks.bookId), eq(books.status, 'present'), libraryAccess, ...filterClauses))
+      .leftJoin(books, and(eq(books.id, collectionBooks.bookId), eq(books.status, 'present'), libraryAccess, ...filterClauses, ...bookClauses))
       .where(this.visibleForUser(userId))
       .groupBy(collections.id)
       .orderBy(collections.name);
@@ -49,6 +46,6 @@ export class OpdsCollectionRepository {
   }
 
   private visibleForUser(userId: number) {
-    return and(or(eq(collections.userId, userId), eq(collections.isPublic, true)), eq(collections.mediaType, 'books'));
+    return or(eq(collections.userId, userId), eq(collections.isPublic, true))!;
   }
 }

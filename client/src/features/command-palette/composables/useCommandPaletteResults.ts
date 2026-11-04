@@ -1,10 +1,11 @@
 import { computed, ref, watch, type Component, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RouteLocationRaw } from 'vue-router'
-import { Moon, Settings, Sparkles, Sun, Upload } from '@lucide/vue'
+import { Moon, Settings, SlidersHorizontal, Sparkles, Sun, Upload } from '@lucide/vue'
 import type { AuthorSummary, BookCard, DashboardScrollerBatchResponse, SeriesSummary } from '@bookorbit/types'
 import { api } from '@/lib/api'
 import { formatNumber } from '@/i18n/formatters'
+import { useSidebarCustomizeMode } from '@/composables/useSidebarCustomizeMode'
 import { useSidebarNav } from '@/composables/useSidebarNav'
 import { SIDEBAR_SECTIONS, type SidebarListKind } from '@/composables/useSidebarSections'
 import { fetchAuthors } from '@/features/author/api/author'
@@ -78,9 +79,10 @@ export function useCommandPaletteResults(query: Ref<string>, tab: Ref<PaletteTab
   const { showBookRequests } = useBookRequestVisibility()
   const { zones } = useSidebarNav()
   const { libraries } = useLibraries()
-  const { bookScopes } = useSmartScopes()
-  const { bookCollections } = useCollections()
+  const { smartScopes } = useSmartScopes()
+  const { collections } = useCollections()
   const themeStore = useThemeStore()
+  const { startCustomizing } = useSidebarCustomizeMode()
 
   const trimmed = computed(() => query.value.trim())
   const needle = computed(() => trimmed.value.toLocaleLowerCase())
@@ -162,11 +164,11 @@ export function useCommandPaletteResults(query: Ref<string>, tab: Ref<PaletteTab
       })),
     )
     const lists: Record<SidebarListKind, { id: number; name: string; icon?: string | null; bookCount?: number | null }[]> = {
-      library: libraries.value.filter((library) => library.type !== 'podcasts'),
-      smartScope: bookScopes.value,
-      collection: bookCollections.value,
+      library: libraries.value,
+      smartScope: smartScopes.value,
+      collection: collections.value,
     }
-    const entities = SIDEBAR_SECTIONS.filter((definition) => definition.medium === 'books').flatMap((definition) =>
+    const entities = SIDEBAR_SECTIONS.flatMap((definition) =>
       lists[definition.kind].map((entity) => ({
         kind: 'place' as const,
         key: `${definition.kind}:${entity.id}`,
@@ -202,6 +204,13 @@ export function useCommandPaletteResults(query: Ref<string>, tab: Ref<PaletteTab
       label: t('components.appHeader.whatsNew'),
       icon: Sparkles,
       run: () => handlers.navigate({ name: 'whats-new' }),
+    })
+    list.push({
+      kind: 'action',
+      key: 'action:customize-sidebar',
+      label: t('components.sidebar.customize.open'),
+      icon: SlidersHorizontal,
+      run: startCustomizing,
     })
     list.push({
       kind: 'action',

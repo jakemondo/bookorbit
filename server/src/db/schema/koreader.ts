@@ -32,6 +32,8 @@ export const koreaderUsers = pgTable(
     passwordMd5: varchar('password_md5', { length: 32 }),
     syncEnabled: boolean('sync_enabled').notNull().default(true),
     readAloudDelivery: varchar('read_aloud_delivery', { length: 20 }).$type<'original' | 'audioless_epub'>(),
+    // KOReader cannot play audio, so the plugin catalog leaves out books whose only content files are audio.
+    hideAudioOnlyBooks: boolean('hide_audio_only_books').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
@@ -155,7 +157,10 @@ export const bookFileHashHistory = pgTable(
   (t) => [
     uniqueIndex('book_file_hash_history_book_file_id_file_hash_idx').on(t.bookFileId, t.fileHash),
     index('book_file_hash_history_file_hash_idx').on(t.fileHash),
-    check('book_file_hash_history_reason_chk', sql`${t.reason} in ('file_write', 'external_change', 'rescan', 'kobo_download')`),
+    check(
+      'book_file_hash_history_reason_chk',
+      sql`${t.reason} in ('file_write', 'external_change', 'rescan', 'kobo_download', 'read_aloud_replace')`,
+    ),
   ],
 );
 
