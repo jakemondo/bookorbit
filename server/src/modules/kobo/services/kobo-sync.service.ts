@@ -17,6 +17,8 @@ import { SmartScopeService } from '../../smart-scope/smart-scope.service';
 import { KoboDeliveryService, deliveryErrorCode } from './kobo-delivery.service';
 import { KoboBookAccessService } from './kobo-book-access.service';
 import { KoboBookIdentityService } from './kobo-book-identity.service';
+import { COMIC_EPUB_CONVERTER_VERSION } from './comic-epub-builder';
+import { COMIC_FORMATS, isComicFormat } from './comic-epub-conversion.service';
 import { normalizeKoboLanguage, selectKoboIsbn } from './kobo-metadata.utils';
 import { KoboReadingStateService } from './kobo-reading-state.service';
 import { encodeSyncToken } from './kobo-sync-token';
@@ -47,6 +49,9 @@ const FIXED_LAYOUT_BACKFILL_CONCURRENCY = 8;
 // again when that hash moves, so changing this re-announces fixed-layout books. 'r2': from v3.4.0
 // the delivery path announced comics converted to kepub as KEPUB instead of EPUB3FL (#1946).
 const FIXED_LAYOUT_DELIVERY_REVISION = 'r2';
+// Comic archives are converted to fixed-layout EPUB on delivery. Their hash follows the converter so a
+// change to the produced bytes re-announces every comic.
+const COMIC_DELIVERY_REVISION = `comic:${COMIC_EPUB_CONVERTER_VERSION}`;
 
 type EligibleSnapshotRow = {
   bookId: number;
@@ -1192,6 +1197,10 @@ export class KoboSyncService {
       return { format: 'PDF', hash: this.buildDeliveryHash('PDF', false) };
     }
 
+    if (isComicFormat(normalizedFormat)) {
+      return { format: 'EPUB3FL', hash: this.buildDeliveryHash('EPUB3FL', false, COMIC_DELIVERY_REVISION) };
+    }
+
     const limitBytes = settings.kepubConversionLimitMb * 1024 * 1024;
     const convertsToKepub = normalizedFormat === 'epub' && settings.convertToKepub && (!fileSizeBytes || fileSizeBytes <= limitBytes);
     const hyphenated = convertsToKepub && settings.forceEnableHyphenation;
@@ -1335,7 +1344,7 @@ export class KoboSyncService {
 
     return and(
       eq(schema.books.status, 'present'),
-      inArray(schema.bookFiles.format, ['epub', 'kepub']),
+      inArray(schema.bookFiles.format, ['epub', 'kepub', ...COMIC_FORMATS]),
       libraryAccessFilter,
       membershipFilter,
       ...contentFilterClauses,

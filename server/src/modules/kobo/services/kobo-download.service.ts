@@ -17,6 +17,7 @@ import { KoboDownloadHashRegistrationService } from './kobo-download-hash-regist
 import { KoboDownloadRepository } from '../kobo-download.repository';
 import { KoboBookAccessService } from './kobo-book-access.service';
 import { KepubConversionService } from './kepub-conversion.service';
+import { ComicEpubConversionService, isComicFormat } from './comic-epub-conversion.service';
 import { KoboSettingsService } from './kobo-settings.service';
 
 /** A narration-free rebuild, living in a temp directory for the length of one download. */
@@ -44,6 +45,7 @@ export class KoboDownloadService implements OnModuleInit {
     private readonly settingsService: KoboSettingsService,
     private readonly bookAccessService: KoboBookAccessService,
     private readonly audiolessEpubService: AudiolessEpubService,
+    private readonly comicConversionService: ComicEpubConversionService,
     @Optional() private readonly deliveries?: KoboDeliveryService,
     @Optional() private readonly selections?: DeliverySelectionService,
     @Optional() private readonly adapterHost?: HttpAdapterHost,
@@ -97,6 +99,12 @@ export class KoboDownloadService implements OnModuleInit {
 
     if (format === 'kepub') {
       return this.streamFile(file.absolutePath, file.id, 'kepub.epub', reply);
+    }
+
+    if (isComicFormat(format)) {
+      // Without a device delivery there is no content digest, so the stored identity stands in for one.
+      const revision = `${file.fileHash ?? 'nohash'}:${file.sizeBytes ?? 0}:${file.mtime?.getTime() ?? 0}`;
+      return this.streamComic(file.absolutePath, revision, format, bookId, file.id, reply);
     }
 
     if (format === 'epub') {
@@ -194,6 +202,16 @@ export class KoboDownloadService implements OnModuleInit {
       );
       throw new InternalServerErrorException('Unable to prepare book download');
     }
+  }
+
+  private async streamComic(sourcePath: string, sourceRevision: string, format: string, bookId: number, fileId: number, reply: FastifyReply) {
+    const converted = await this.comicConversionService.acquireEpub({
+      sourcePath,
+      sourceRevision,
+      format,
+      bookId,
+    });
+    return this.streamFile(converted.path, fileId, 'epub', reply, converted.release);
   }
 
   private async streamKepub(

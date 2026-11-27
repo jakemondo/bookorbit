@@ -9,6 +9,7 @@ import { KoboBookAccessService } from './kobo-book-access.service';
 import { KoboSettingsService } from './kobo-settings.service';
 import { KepubConversionService } from './kepub-conversion.service';
 import { KepubifyBinaryService } from './kepubify-binary.service';
+import { ComicEpubConversionService, isComicFormat } from './comic-epub-conversion.service';
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
 import { computeFileHashFromHandle } from '../../../common/utils/file-hash.utils';
 import { kepubContentDigest } from './kepub-content-digest';
@@ -33,6 +34,17 @@ export function isSettledDelivery(delivery: DeliveryStanding): boolean {
   return delivery.state === 'user_confirmed' || (delivery.state === 'transfer_observed' && !isUnconfirmedReplacement(delivery));
 }
 
+async function sha256OfPath(path: string): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    const hash = createHash('sha256');
+    for await (const chunk of handle.createReadStream({ start: 0, autoClose: false })) hash.update(chunk);
+    return hash.digest('hex');
+  } finally {
+    await handle.close();
+  }
+}
+
 export function deliveryErrorCode(error: unknown): string | null {
   if (!(error instanceof HttpException)) return null;
   const response = error.getResponse();
@@ -50,6 +62,7 @@ export class KoboDeliveryService {
     private readonly artifacts: DeliveryArtifactService,
     private readonly conversion: KepubConversionService,
     private readonly binary: KepubifyBinaryService,
+    private readonly comics: ComicEpubConversionService,
   ) {}
 
   async current(userId: number, deviceId: number, bookId: number) {
@@ -92,7 +105,18 @@ export class KoboDeliveryService {
     let conversionRelease: (() => Promise<void>) | undefined;
     try {
       if (file.format === 'kepub') artifact.format = 'kepub';
-      else if (
+      else if (isComicFormat(file.format)) {
+        // A comic archive is never offered as is: the device cannot open it. A failure here defers the
+        // book to the next sync instead of announcing bytes the Kobo would reject.
+        const converted = await this.comics.acquireEpub({
+          sourcePath: artifact.path,
+          sourceRevision: artifact.sha256,
+          format: file.format,
+          bookId,
+        });
+        conversionRelease = converted.release;
+        await this.describeConvertedArtifact(artifact, converted.path, 'epub');
+      } else if (
         file.format === 'epub' &&
         settings.convertToKepub &&
         (policy !== 'original' || !file.mediaOverlayAvailable) &&
@@ -109,18 +133,7 @@ export class KoboDeliveryService {
             audioless: artifact.actualVariant === 'audioless_epub',
           });
           conversionRelease = converted.release;
-          const handle = await open(converted.path, 'r');
-          try {
-            const hash = createHash('sha256');
-            for await (const chunk of handle.createReadStream({ start: 0, autoClose: false })) hash.update(chunk);
-            artifact.sha256 = hash.digest('hex');
-            artifact.fileHash = await computeFileHashFromHandle(handle);
-            artifact.sizeBytes = (await handle.stat()).size;
-            artifact.format = 'kepub';
-            artifact.artifactId = artifact.sha256;
-          } finally {
-            await handle.close();
-          }
+          await this.describeConvertedArtifact(artifact, converted.path, 'kepub');
           contentDigest = await kepubContentDigest(converted.path);
         } catch (error) {
           converterVersion = null;
@@ -153,6 +166,22 @@ export class KoboDeliveryService {
     } finally {
       await conversionRelease?.();
       await artifact.release();
+    }
+  }
+
+  /** Points an offer's identity at a converted copy, so the device is told the size and digest it will download. */
+  private async describeConvertedArtifact(artifact: DeliveryArtifact, path: string, format: 'epub' | 'kepub'): Promise<void> {
+    const handle = await open(path, 'r');
+    try {
+      const hash = createHash('sha256');
+      for await (const chunk of handle.createReadStream({ start: 0, autoClose: false })) hash.update(chunk);
+      artifact.sha256 = hash.digest('hex');
+      artifact.fileHash = await computeFileHashFromHandle(handle);
+      artifact.sizeBytes = (await handle.stat()).size;
+      artifact.format = format;
+      artifact.artifactId = artifact.sha256;
+    } finally {
+      await handle.close();
     }
   }
 
@@ -230,7 +259,17 @@ export class KoboDeliveryService {
     );
     let conversionRelease: (() => Promise<void>) | undefined;
     try {
-      if (record.metadata.format === 'kepub' && file.format !== 'kepub') {
+      if (isComicFormat(file.format)) {
+        const converted = await this.comics.acquireEpub({
+          sourcePath: artifact.path,
+          sourceRevision: artifact.sha256,
+          format: file.format,
+          bookId: record.bookId,
+        });
+        artifact.path = converted.path;
+        conversionRelease = converted.release;
+        artifact.sha256 = await sha256OfPath(artifact.path);
+      } else if (record.metadata.format === 'kepub' && file.format !== 'kepub') {
         // Another converter may still write the same content, which the digest can confirm; without one it cannot be told.
         if ((await this.binary.getVersion()) !== record.options.converterVersion && !record.options.kepubContentDigest)
           throw new ConflictException({ code: 'DELIVERY_ARTIFACT_UNAVAILABLE' });
@@ -244,14 +283,7 @@ export class KoboDeliveryService {
         });
         artifact.path = converted.path;
         conversionRelease = converted.release;
-        const handle = await open(artifact.path, 'r');
-        try {
-          const hash = createHash('sha256');
-          for await (const chunk of handle.createReadStream({ start: 0, autoClose: false })) hash.update(chunk);
-          artifact.sha256 = hash.digest('hex');
-        } finally {
-          await handle.close();
-        }
+        artifact.sha256 = await sha256OfPath(artifact.path);
       }
       if (artifact.sha256 !== record.metadata.sha256) {
         if (!(await this.holdsDeliveredContent(record, artifact.path))) throw new ConflictException({ code: 'DELIVERY_ARTIFACT_UNAVAILABLE' });

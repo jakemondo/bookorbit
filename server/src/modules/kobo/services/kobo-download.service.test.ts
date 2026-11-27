@@ -13,6 +13,7 @@ import { AudiolessEpubService } from '../../book/audioless-epub.service';
 import { KoboDownloadRepository } from '../kobo-download.repository';
 import { KoboBookAccessService } from './kobo-book-access.service';
 import { KepubConversionService } from './kepub-conversion.service';
+import { ComicEpubConversionService } from './comic-epub-conversion.service';
 import { KoboSettingsService } from './kobo-settings.service';
 import { KoboDownloadHashRegistrationService } from './kobo-download-hash-registration.service';
 import { KoboDownloadService } from './kobo-download.service';
@@ -36,6 +37,8 @@ const openMock = vi.mocked(open);
 const hashMock = vi.mocked(computeFileHashFromHandle);
 const readStreamMock = vi.mocked(createReadStream);
 
+const COMIC_EPUB = '/data/.comic-epub-cache/11/converted.epub';
+
 function makeDeps() {
   return {
     repository: {
@@ -44,6 +47,7 @@ function makeDeps() {
       registerDeliveredHash: vi.fn().mockResolvedValue(undefined),
     },
     conversion: { getKepubPath: vi.fn().mockResolvedValue(CONVERTED) },
+    comics: { acquireEpub: vi.fn().mockResolvedValue({ path: COMIC_EPUB, release: vi.fn().mockResolvedValue(undefined) }) },
     settings: { getSettings: vi.fn().mockResolvedValue({ convertToKepub: true, forceEnableHyphenation: false, kepubConversionLimitMb: 10 }) },
     access: { assertBookAccessible: vi.fn().mockResolvedValue(undefined) },
     audioless: { writeArchive: vi.fn().mockResolvedValue({ removedEntries: 9, sanitizedEntries: 9 }) },
@@ -95,6 +99,7 @@ describe('KoboDownloadService', () => {
         { provide: KoboDownloadRepository, useValue: deps.repository },
         { provide: KoboDownloadHashRegistrationService, useValue: { record: deps.repository.registerDeliveredHash } },
         { provide: KepubConversionService, useValue: deps.conversion },
+        { provide: ComicEpubConversionService, useValue: deps.comics },
         { provide: KoboSettingsService, useValue: deps.settings },
         { provide: KoboBookAccessService, useValue: deps.access },
         { provide: AudiolessEpubService, useValue: deps.audioless },
@@ -136,6 +141,22 @@ describe('KoboDownloadService', () => {
     expect(reply.header).toHaveBeenCalledWith('Content-Length', 4096);
     expect(reply.header).toHaveBeenCalledWith('Content-Disposition', `attachment; filename="book-22.${extension}"`);
     expect(deps.conversion.getKepubPath).toHaveBeenCalledTimes(conversion ? 1 : 0);
+  });
+
+  it.each(['cbz', 'cbr', 'cb7', 'CBZ'])('streams a %s comic as its fixed-layout EPUB conversion', async (format) => {
+    setFile({ format, absolutePath: '/books/comic.cbz', sizeBytes: 2048, mtime: new Date(5000) });
+    await service.streamBook(7, 11, reply as never);
+    expect(deps.comics.acquireEpub).toHaveBeenCalledExactlyOnceWith({
+      sourcePath: '/books/comic.cbz',
+      sourceRevision: `${ORIGINAL_HASH}:2048:5000`,
+      format: format.toLowerCase(),
+      bookId: 11,
+    });
+    expect(openMock).toHaveBeenCalledExactlyOnceWith(COMIC_EPUB, 'r');
+    expect(reply.type).toHaveBeenCalledWith('application/epub+zip');
+    expect(reply.header).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename="book-22.epub"');
+    expect(deps.repository.registerDeliveredHash).toHaveBeenCalledExactlyOnceWith(22, DELIVERED_HASH);
+    expect(deps.conversion.getKepubPath).not.toHaveBeenCalled();
   });
 
   it.each([

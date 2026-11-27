@@ -9,6 +9,7 @@ import { AudiolessEpubService } from '../../book/audioless-epub.service';
 import { KoboDownloadRepository } from '../kobo-download.repository';
 import { KoboBookAccessService } from './kobo-book-access.service';
 import { KepubConversionService } from './kepub-conversion.service';
+import { ComicEpubConversionService } from './comic-epub-conversion.service';
 import { KoboDownloadHashRegistrationService } from './kobo-download-hash-registration.service';
 import { KoboDownloadService } from './kobo-download.service';
 import { KoboSettingsService } from './kobo-settings.service';
@@ -41,6 +42,7 @@ describe('Kobo delivered file descriptor', () => {
             },
           },
           { provide: KepubConversionService, useValue: { getKepubPath: vi.fn().mockResolvedValue(path) } },
+          { provide: ComicEpubConversionService, useValue: {} },
           {
             provide: KoboSettingsService,
             useValue: { getSettings: vi.fn().mockResolvedValue({ convertToKepub: true, kepubConversionLimitMb: 10 }) },

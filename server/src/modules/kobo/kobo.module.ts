@@ -21,6 +21,7 @@ import { KoboSyncController } from './kobo-sync.controller';
 import { KoboUserController } from './kobo-user.controller';
 import { KoboTokenGuard } from './guards/kobo-token.guard';
 import { KepubConversionService } from './services/kepub-conversion.service';
+import { ComicEpubConversionService } from './services/comic-epub-conversion.service';
 import { KoboBookAccessService } from './services/kobo-book-access.service';
 import { KepubifyBinaryService } from './services/kepubify-binary.service';
 import { KoboAnnotationExchangeService } from './services/kobo-annotation-exchange.service';
@@ -73,6 +74,7 @@ import { KoboAnalyticsService } from './services/kobo-analytics.service';
     KoboTokenGuard,
     KepubifyBinaryService,
     KepubConversionService,
+    ComicEpubConversionService,
     KoboDeviceService,
     KoboSettingsService,
     KoboBookAccessService,
