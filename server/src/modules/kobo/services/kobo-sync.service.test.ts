@@ -1673,6 +1673,17 @@ describe('KoboSyncService', () => {
   describe('fixed-layout (comic) delivery', () => {
     const settings = { convertToKepub: true, forceEnableHyphenation: false, kepubConversionLimitMb: 1 };
 
+    it.each(['cbz', 'cbr', 'cb7', 'CBZ'])('announces a %s archive as EPUB3FL, since it is delivered converted', (format) => {
+      const service = makeService(makeDb());
+      const comic = (service as any).getDeliveryInfo(format, 1024, settings, null);
+      const fixedLayoutEpub = (service as any).getDeliveryInfo('epub', 1024, settings, true);
+
+      expect(comic.format).toBe('EPUB3FL');
+      // Its own hash, so a converter change re-announces comics without touching fixed-layout EPUBs.
+      expect(comic.hash).not.toBe(fixedLayoutEpub.hash);
+      expect((service as any).getDeliveryInfo('cbz', 1024, { ...settings, convertToKepub: false }, null).hash).toBe(comic.hash);
+    });
+
     it('announces a fixed-layout epub as EPUB3FL so the device renders it full screen', () => {
       const service = makeService(makeDb());
 
