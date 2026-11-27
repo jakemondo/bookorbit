@@ -35,7 +35,7 @@ local VerticalSpan = require("ui/widget/verticalspan")
 local lfs = require("libs/libkoreader-lfs")
 local util = require("util")
 local T = require("ffi/util").template
-local _ = require("gettext")
+local _ = require("bookorbit_gettext")
 
 local BookOrbitApi = require("bookorbit_api")
 local BoardMetrics = require("bookorbit_board_metrics")
@@ -62,8 +62,6 @@ local DEFAULT_GRID_COLUMNS = CatalogUtil.DEFAULT_GRID_COLUMNS
 local DEFAULT_GRID_ROWS = CatalogUtil.DEFAULT_GRID_ROWS
 local MAX_RECENT_SEARCHES = CatalogUtil.MAX_RECENT_SEARCHES
 local ON_DEVICE_MAX_IDS = CatalogUtil.ON_DEVICE_MAX_IDS
-local NOT_ON_DEVICE_SCAN_SIZE = CatalogUtil.NOT_ON_DEVICE_SCAN_SIZE
-local scanNotOnDeviceIds = CatalogUtil.scanNotOnDeviceIds
 local SORTS = CatalogUtil.SORTS
 local SORT_LABELS = CatalogUtil.SORT_LABELS
 local NATURAL_ORDER = CatalogUtil.NATURAL_ORDER
@@ -696,9 +694,15 @@ function BookOrbitCatalog:onDeviceFilePath(file)
         local Delivery = require("bookorbit_delivery")
         local variants = self.settings.catalog_downloaded_variants or {}
         local marker = variants[Delivery.key(self.client) .. "|" .. tostring(file.id) .. "|" .. file.downloadVariant]
-        if type(marker) ~= "table" or marker.selection ~= file.selection then return nil end
-        local path = marker.path
-        return path and lfs.attributes(path, "mode") == "file" and path or nil
+        if type(marker) == "table" then
+            if marker.selection ~= file.selection then return nil end
+            local path = marker.path
+            return path and lfs.attributes(path, "mode") == "file" and path or nil
+        end
+        -- With no delivery record, a file without narration falls back to its matched copy:
+        -- every variant of it is the same bytes, including a copy an older plugin downloaded
+        -- before records existed. A narrated EPUB's copy could be either form, so it cannot.
+        if file.sourceMediaOverlayAvailable ~= false then return nil end
     end
     local path = file and file.id and self.on_device_files and self.on_device_files[file.id]
     return type(path) == "string" and lfs.attributes(path, "mode") == "file" and path or nil
@@ -831,10 +835,6 @@ function BookOrbitCatalog:rootItems()
         text = _("On device"),
         mandatory = on_device_count > 0 and CatalogUtil.formatCount(on_device_count) or nil,
         kind = "on-device",
-    })
-    table.insert(items, {
-        text = _("Not on device"),
-        kind = "not-on-device",
     })
 
     return items
@@ -1150,6 +1150,8 @@ function BookOrbitCatalog:fetchBookPage(params, title, push)
             if saved then
                 body = saved.body
                 offline_saved_at = saved.saved_at or 0
+            elseif query.on_device_filter and type(err) ~= "number" then
+                return self:showOnDeviceOffline(params, title, push)
             else
                 self:showRetry(err, function()
                     self:loadBooks(params, title, push)
@@ -1178,10 +1180,31 @@ function BookOrbitCatalog:fetchBookPage(params, title, push)
         offline_saved_at and { offline_saved_at = offline_saved_at } or { complete = complete_series })
 end
 
-function BookOrbitCatalog:loadBooks(params, title, push)
+-- opts.connect: the reader asked to reach the server, so even On device waits
+-- for a connection.
+function BookOrbitCatalog:loadBooks(params, title, push, opts)
+    if params and params.on_device_filter and not (opts and opts.connect) and not NetworkMgr:isConnected() then
+        return self:showOnDeviceOffline(params, title, push)
+    end
     self:runConnected(function()
         self:fetchBookPage(params, title, push)
     end)
+end
+
+-- On device built from this device alone, with the offline band in place of
+-- the toolbar; the band's tap is what reaches the server. The device cannot
+-- apply the server's filters (library, status, format), so offline the list
+-- is every book here, by title, and says so.
+function BookOrbitCatalog:showOnDeviceOffline(params, title, push)
+    local query = {
+        ids = params.ids,
+        on_device_filter = true,
+        sort = "title",
+        order = "asc",
+        page = params.page or 1,
+        offset = params.offset,
+    }
+    self:showBookPage(self:listOnDeviceOfflineBody(query), query, title or _("On device"), push ~= false, { offline_saved_at = 0 })
 end
 
 function BookOrbitCatalog:loadOnDevice()
@@ -1204,49 +1227,6 @@ function BookOrbitCatalog:loadOnDevice()
         return
     end
     self:loadBooks({ ids = table.concat(capped, ","), sort = "title", on_device_filter = true }, _("On device"), true)
-end
-
-function BookOrbitCatalog:collectNotOnDeviceIds()
-    return scanNotOnDeviceIds(function(page)
-        return self:fetch(_("Finding books not on this device…"), function()
-            return self.client:catalogBooks({
-                page = page,
-                size = NOT_ON_DEVICE_SCAN_SIZE,
-                sort = "recently_added",
-                order = "desc",
-            })
-        end)
-    end, function(book)
-        return self:isOnDevice(book)
-    end)
-end
-
-function BookOrbitCatalog:loadNotOnDevice()
-    self:runConnected(function()
-        -- Without the maps every book reads as absent, which would list books
-        -- that are already here. refreshOnDevice starts the scan; the list is
-        -- worth waiting for rather than showing wrong.
-        if not self:refreshOnDevice() then
-            Toast.show(_("Still checking which books are on this device"), { icon = "hourglass", timeout = 3 })
-            return
-        end
-        local ids, err = self:collectNotOnDeviceIds()
-        if not ids then
-            if err ~= "cancelled" then
-                self:showRetry(err, function()
-                    self:loadNotOnDevice()
-                end)
-            end
-            return
-        end
-        if #ids == 0 then
-            Toast.show(_("The newest books are already on this device"), { icon = "info", timeout = 3 })
-            return
-        end
-        -- The tile says "Not on device"; the list says what it actually holds,
-        -- since the walk covers recent additions rather than the whole library.
-        self:fetchBookPage({ ids = table.concat(ids, ","), sort = "recently_added" }, _("Not on device (recent)"), true)
-    end)
 end
 
 function BookOrbitCatalog:scopeParams(query)
@@ -1363,7 +1343,8 @@ function BookOrbitCatalog:showBookPage(body, query, title, push, opts)
         subtitle = T(_("Sort: %1"), sort_label)
     end
     if filters then
-        subtitle = subtitle .. T(_(" - Filter: %1"), filters)
+        -- TRANSLATORS: %1 is the line so far (count and sort), %2 the active filters.
+        subtitle = T(_("%1 - Filter: %2"), subtitle, filters)
     end
     if body.seriesSummary then
         subtitle = T(_("Read %1/%2 - %3"), body.seriesSummary.finished or 0, body.seriesSummary.total or total, subtitle)
@@ -1399,6 +1380,7 @@ function BookOrbitCatalog:showBookPage(body, query, title, push, opts)
         author_summary = body.authorSummary,
         series_summary = body.seriesSummary,
         on_device_filter = query.on_device_filter,
+        not_on_device_filter = query.not_on_device_filter,
         list_offline = opts.offline_saved_at ~= nil or nil,
         list_saved_at = opts.offline_saved_at,
     }, push)
@@ -2422,8 +2404,6 @@ function BookOrbitCatalog:onMenuSelect(item)
         end
     elseif item.kind == "on-device" then
         self:loadOnDevice()
-    elseif item.kind == "not-on-device" then
-        self:loadNotOnDevice()
     elseif item.kind == "books" then
         self:loadBooks(item.params or {}, item.list_title or item.text)
     elseif item.kind == "book" then

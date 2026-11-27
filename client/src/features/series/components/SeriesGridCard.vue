@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { RouteLocationRaw } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AlertCircle, Check, Layers } from '@lucide/vue'
 import type { SeriesSummary } from '@bookorbit/types'
 import { formatNumber } from '@/i18n/formatters'
 import { useCoverVersions } from '@/features/book/composables/useCoverVersions'
 import BookCoverArtwork from '@/features/book/components/BookCoverArtwork.vue'
+import ActivateLink from '@/components/ActivateLink.vue'
 import SeriesVolumeTrack from './SeriesVolumeTrack.vue'
 import SeriesLibraryChip from './SeriesLibraryChip.vue'
 import { seriesAuthorLine, seriesExtraAuthorCount, seriesRowFacts, seriesCoverSlots } from '../lib/series-summary'
 import { STACK_MAX_VISIBLE, coverStackLayout, orderForStack } from '../lib/cover-stack-layout'
+import { chapterCountLabel, gapListPreview, seriesGapTokens, seriesUnitCountsLabel, volumeNumberToken } from '../lib/series-unit-label'
 
 const props = defineProps<{ series: SeriesSummary }>()
 
@@ -44,17 +47,51 @@ const cardNote = computed(() => {
   return t('series.card.readSummary', { base, read: facts.value.readVolumes })
 })
 
-const gapPreview = computed(() => {
-  const shown = props.series.gaps.map((gap) => `#${gap}`).join(', ')
-  const rest = props.series.gapCount - props.series.gaps.length
-  return rest > 0 ? t('series.gaps.previewMore', { shown, count: rest }) : shown
+const gapPreview = computed(() =>
+  gapListPreview(
+    t,
+    props.series.gaps.map((gap) => volumeNumberToken(t, gap, props.series.unitCounts)),
+    props.series.gapCount,
+  ),
+)
+
+const hasChapters = computed(() => facts.value.chapters > 0)
+const chapterChipLabel = computed(() => chapterCountLabel(t, props.series.unitCounts))
+const chapterReadLabel = computed(() => t('series.track.readCount', { count: facts.value.readChapters }))
+
+/** Every missing number in one list, "missing Vol. 11, Ch. 93", since the card has one line for it. */
+const chapterGapNote = computed(() => {
+  const series = props.series
+  const total = facts.value.volumeGapCount + (series.chapterGapCount ?? 0)
+  if (total === 0) return null
+  const tokens = seriesGapTokens(t, series.gaps, series.chapterGaps ?? [], series.unitCounts)
+  return t('series.units.missingList', { list: gapListPreview(t, tokens, total) })
+})
+
+const countChip = computed(() => {
+  const { ownedVolumes, chapters } = facts.value
+  if (chapters > 0 && ownedVolumes > 0) {
+    return {
+      text: t('series.units.countChip', { volumes: formatNumber(ownedVolumes), chapters: formatNumber(chapters) }),
+      title: seriesUnitCountsLabel(t, props.series.unitCounts, ownedVolumes),
+    }
+  }
+  if (chapters > 1) return { text: formatNumber(chapters), title: chapterCountLabel(t, props.series.unitCounts) }
+  if (chapters === 0 && ownedVolumes > 1) return { text: formatNumber(ownedVolumes), title: t('series.card.volumeCount', { count: ownedVolumes }) }
+  return null
 })
 
 const progressLabel = computed(() =>
-  facts.value.isSingleVolume ? t('series.card.oneVolumeShort') : `${formatNumber(facts.value.readVolumes)}/${formatNumber(facts.value.ownedVolumes)}`,
+  facts.value.isSingleVolume ? t('series.card.oneVolumeShort') : `${formatNumber(facts.value.readTotal)}/${formatNumber(facts.value.ownedTotal)}`,
 )
 
-const cardLabel = computed(() => t('series.card.label', { name: props.series.name, read: facts.value.readVolumes, total: facts.value.ownedVolumes }))
+const location = computed<RouteLocationRaw>(() => ({ name: 'series-detail', params: { seriesId: props.series.id } }))
+
+const cardLabel = computed(() =>
+  hasChapters.value
+    ? t('series.units.cardLabel', { name: props.series.name, read: facts.value.readTotal, total: facts.value.ownedTotal })
+    : t('series.card.label', { name: props.series.name, read: facts.value.readVolumes, total: facts.value.ownedVolumes }),
+)
 
 function handleOpen() {
   emit('open', props.series.id)
@@ -62,13 +99,11 @@ function handleOpen() {
 </script>
 
 <template>
-  <article
+  <ActivateLink
+    :to="location"
     class="series-card group flex min-w-0 cursor-pointer flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-[border-color,box-shadow] duration-150 hover:border-ring hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring max-[519px]:flex-row"
-    tabindex="0"
-    role="button"
     :aria-label="cardLabel"
-    @click="handleOpen"
-    @keydown.enter="handleOpen"
+    @activate="handleOpen"
     @keydown.space.prevent="handleOpen"
   >
     <div
@@ -96,12 +131,13 @@ function handleOpen() {
         </div>
 
         <span
-          v-if="facts.ownedVolumes > 1"
+          v-if="countChip"
+          data-testid="series-card-count"
           class="absolute right-1 top-1 z-20 inline-flex h-[21px] items-center gap-1 rounded-md border border-border bg-background/85 px-1.5 text-[11.5px] font-semibold tabular-nums text-foreground backdrop-blur-sm"
-          :title="t('series.card.volumeCount', { count: facts.ownedVolumes })"
+          :title="countChip.title ?? undefined"
         >
           <Layers :size="11" class="text-muted-foreground" />
-          {{ formatNumber(facts.ownedVolumes) }}
+          {{ countChip.text }}
         </span>
       </div>
 
@@ -109,7 +145,18 @@ function handleOpen() {
         <SeriesVolumeTrack :series="series" :max-segment-width="40" align="center" />
       </div>
 
-      <p class="flex min-w-0 items-center gap-1.5 py-2 text-[11.5px] text-muted-foreground max-[519px]:hidden">
+      <p
+        v-if="hasChapters"
+        data-testid="series-card-chapters"
+        class="flex min-w-0 items-center gap-1.5 py-2 text-[11.5px] text-muted-foreground max-[519px]:hidden"
+      >
+        <span class="inline-flex h-[21px] shrink-0 items-center gap-1 rounded-md bg-surface-3 px-1.5 font-semibold text-foreground">
+          {{ chapterChipLabel }}
+        </span>
+        <span v-if="chapterGapNote" class="min-w-0 flex-1 truncate text-destructive" :title="chapterGapNote">{{ chapterGapNote }}</span>
+        <span v-else class="min-w-0 flex-1 truncate">{{ chapterReadLabel }}</span>
+      </p>
+      <p v-else class="flex min-w-0 items-center gap-1.5 py-2 text-[11.5px] text-muted-foreground max-[519px]:hidden">
         <span
           v-if="series.gapCount > 0"
           class="inline-flex h-[21px] shrink-0 items-center gap-1 rounded-md bg-destructive/15 px-1.5 font-semibold text-destructive"
@@ -157,7 +204,7 @@ function handleOpen() {
         </span>
       </div>
     </div>
-  </article>
+  </ActivateLink>
 </template>
 
 <style scoped>

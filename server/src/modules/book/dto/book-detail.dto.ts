@@ -57,6 +57,8 @@ export class BookDetailDto {
   publisher: string | null;
   publishedDate: string | null;
   publishedYear: number | null;
+  editionName: string | null;
+  originalPublishedYear: number | null;
   language: string | null;
   pageCount: number | null;
   seriesId: number | null;
@@ -80,6 +82,8 @@ export class BookDetailDto {
   authors: { id: number; name: string; sortName: string | null }[];
   genres: string[];
   tags: string[];
+  genreRefs: { id: number; name: string }[];
+  tagRefs: { id: number; name: string }[];
   files: BookFileDto[];
   lastWrittenAt: Date | null;
   metadataScore: number | null;
@@ -95,4 +99,5 @@ export class BookDetailDto {
   linkedBooks: LinkedBookSummary[];
   linkGroupId: number | null;
   linkIsLead: boolean;
+  linkSelf: LinkedBookSummary | null;
 }

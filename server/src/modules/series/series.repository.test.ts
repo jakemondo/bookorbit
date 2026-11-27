@@ -45,11 +45,12 @@ function makeFindPageDb(facetResult: unknown, dataResult: unknown) {
 
 function stubPageHelpers(
   repo: SeriesRepository,
-  maps?: { authors?: Map<number, string[]>; covers?: Map<number, number[]>; members?: Map<number, unknown> },
+  maps?: { authors?: Map<number, string[]>; covers?: Map<number, number[]>; members?: Map<number, unknown>; works?: Map<number, number> },
 ) {
   vi.spyOn(repo as never, 'fetchAuthorsForSeries').mockResolvedValue(maps?.authors ?? new Map());
   vi.spyOn(repo as never, 'fetchCoverBookIds').mockResolvedValue(maps?.covers ?? new Map());
   vi.spyOn(repo as never, 'fetchSeriesMembers').mockResolvedValue(maps?.members ?? new Map());
+  vi.spyOn(repo as never, 'fetchWorkCounts').mockResolvedValue(maps?.works ?? new Map());
 }
 
 function makeDb() {
@@ -95,8 +96,30 @@ describe('SeriesRepository', () => {
 
     it('returns items with authors and coverBookIds when rows found', async () => {
       const seriesRows = [
-        { id: 10, name: 'Dune', bookCount: 6, readCount: 3, readingCount: 1, expectedBookCount: 6, lastAddedAt: '2024-01-01' },
-        { id: 11, name: 'Foundation', bookCount: 7, readCount: 0, readingCount: 0, expectedBookCount: null, lastAddedAt: '2023-06-15' },
+        {
+          id: 10,
+          name: 'Dune',
+          bookCount: 6,
+          readCount: 3,
+          readingCount: 1,
+          chapterCount: 2,
+          issueCount: 0,
+          chapterReadCount: 1,
+          expectedBookCount: 6,
+          lastAddedAt: '2024-01-01',
+        },
+        {
+          id: 11,
+          name: 'Foundation',
+          bookCount: 7,
+          readCount: 0,
+          readingCount: 0,
+          chapterCount: 0,
+          issueCount: 0,
+          chapterReadCount: 0,
+          expectedBookCount: null,
+          lastAddedAt: '2023-06-15',
+        },
       ];
       const { select } = makeFindPageDb([{ ...NO_FACETS, all: 2 }], seriesRows);
       db.select = select;
@@ -113,7 +136,7 @@ describe('SeriesRepository', () => {
         [10, { rows: [{ bookId: 100, seriesIndex: '1', title: 'Dune', status: 'read' }], truncated: false, libraryNames: ['Novels'] }],
       ]);
 
-      stubPageHelpers(repo, { authors: authorsMap, covers: coversMap, members: membersMap });
+      stubPageHelpers(repo, { authors: authorsMap, covers: coversMap, members: membersMap, works: new Map([[10, 5]]) });
 
       const result = await repo.findPage(BASE_PARAMS);
 
@@ -123,8 +146,12 @@ describe('SeriesRepository', () => {
         id: 10,
         name: 'Dune',
         bookCount: 6,
+        workCount: 5,
         readCount: 3,
         readingCount: 1,
+        chapterCount: 2,
+        issueCount: 0,
+        chapterReadCount: 1,
         expectedBookCount: 6,
         authors: ['Frank Herbert'],
         coverBookIds: [100, 101],
@@ -137,8 +164,12 @@ describe('SeriesRepository', () => {
         id: 11,
         name: 'Foundation',
         bookCount: 7,
+        workCount: 7,
         readCount: 0,
         readingCount: 0,
+        chapterCount: 0,
+        issueCount: 0,
+        chapterReadCount: 0,
         expectedBookCount: null,
         authors: ['Isaac Asimov'],
         coverBookIds: [200],

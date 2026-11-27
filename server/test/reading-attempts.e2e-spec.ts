@@ -350,6 +350,28 @@ describe('Reading attempts main-flow simulation (docker e2e)', { timeout: TIMEOU
     expect((await listAttempts(book.bookId)).total).toBe(0);
   });
 
+  it('starts the first reading attempt at the configured threshold and keeps it if progress moves back', async () => {
+    const { bookId } = await createBook();
+    const statuses = ctx.app.get(UserBookStatusService);
+    const readingThreshold = 5;
+    const finishThreshold = 98;
+
+    await statuses.autoUpdate(adminUserId, bookId, 1, readingThreshold, finishThreshold, { origin: 'koreader' });
+    await statuses.autoUpdate(adminUserId, bookId, 0, readingThreshold, finishThreshold, { meaningfulActivity: true });
+    await statuses.autoUpdate(adminUserId, bookId, 1, readingThreshold, finishThreshold, { strongRereadEvidence: true });
+    expect(await statuses.findOne(adminUserId, bookId)).toBeNull();
+    expect((await listAttempts(bookId)).total).toBe(0);
+
+    await statuses.autoUpdate(adminUserId, bookId, 5, readingThreshold, finishThreshold, { origin: 'koreader' });
+    expect(await statuses.findOne(adminUserId, bookId)).toMatchObject({ status: 'reading', source: 'auto' });
+    const history = await listAttempts(bookId);
+    expect(history.items).toEqual([expect.objectContaining({ origin: 'koreader', outcome: null })]);
+
+    await statuses.autoUpdate(adminUserId, bookId, 1, readingThreshold, finishThreshold);
+    expect(await statuses.findOne(adminUserId, bookId)).toMatchObject({ status: 'reading' });
+    expect(await listAttempts(bookId)).toEqual(history);
+  });
+
   it('9. detects web rereads from a substantial progress rollback and completes the same attempt', async () => {
     const book = await createBook();
     await patchStatus(book.bookId, { status: 'read', startedAt: '2024-01-01', finishedAt: '2024-01-10' });
@@ -470,6 +492,7 @@ describe('Reading attempts main-flow simulation (docker e2e)', { timeout: TIMEOU
         occurredOn: '2026-04-01',
         origin: 'kobo',
         progress: 10,
+        readingThreshold: 5,
         finishThreshold: 98,
         strongRereadEvidence: true,
         meaningfulActivity: false,
@@ -480,6 +503,7 @@ describe('Reading attempts main-flow simulation (docker e2e)', { timeout: TIMEOU
         occurredOn: '2026-04-01',
         origin: 'kobo',
         progress: 12,
+        readingThreshold: 5,
         finishThreshold: 98,
         strongRereadEvidence: true,
         meaningfulActivity: false,
@@ -1251,6 +1275,62 @@ describe('Reading attempts main-flow simulation (docker e2e)', { timeout: TIMEOU
     expect(monthsLastYear.reduce((sum, month) => sum + month.count, 0)).toBe(1);
   });
 
+  it('33. counts finishing both linked editions as one finished book and a re-read, while the goal counts both completions', async () => {
+    const username = `linked-editions-${randomUUID()}`;
+    const password = 'LinkedEditions123!';
+    const [user] = await ctx.db
+      .insert(schema.users)
+      .values({
+        username,
+        name: 'Linked Editions User',
+        passwordHash: await hash(password, 4),
+        isDefaultPassword: false,
+        provisioningMethod: 'local',
+      })
+      .returning({ id: schema.users.id });
+    await ctx.db.insert(schema.userLibraryAccess).values({ userId: user.id, libraryId, accessLevel: 'viewer' });
+    const login = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username, password } });
+    const token = (login.json() as { accessToken: string }).accessToken;
+    const ebook = await createBook();
+    const audiobook = await createBook();
+    const getJson = async <T>(url: string) => {
+      const response = await ctx.app.inject({ method: 'GET', url: `/api/v1${url}`, headers: auth(token) });
+      expect(response.statusCode).toBe(200);
+      return response.json() as T;
+    };
+    const counts = async () => ({
+      completedBooks: (await getJson<{ completedBooks: number }>('/user-statistics/summary')).completedBooks,
+      goal: (await getJson<{ completedBooks: number }>('/dashboard/widgets/reading-goal')).completedBooks,
+      audiobookRead: (
+        await getJson<{ items: Array<{ readNumber: number | null; completedReads: number }> }>(`/reading-history?bookId=${audiobook.bookId}`)
+      ).items[0],
+    });
+
+    for (const book of [ebook, audiobook]) {
+      const finished = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/books/${book.bookId}/status`,
+        headers: auth(token),
+        payload: { status: 'read' },
+      });
+      expect(finished.statusCode).toBe(200);
+    }
+    expect(await counts()).toEqual({ completedBooks: 2, goal: 2, audiobookRead: expect.objectContaining({ readNumber: 1, completedReads: 1 }) });
+
+    const linked = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/books/links',
+      headers: auth(ctx.adminToken),
+      payload: { bookIds: [ebook.bookId, audiobook.bookId] },
+    });
+    expect(linked.statusCode).toBe(201);
+    expect(await counts()).toEqual({ completedBooks: 1, goal: 2, audiobookRead: expect.objectContaining({ readNumber: 2, completedReads: 2 }) });
+
+    const unlinked = await ctx.app.inject({ method: 'DELETE', url: `/api/v1/books/${ebook.bookId}/link`, headers: auth(ctx.adminToken) });
+    expect(unlinked.statusCode).toBe(204);
+    expect(await counts()).toEqual({ completedBooks: 2, goal: 2, audiobookRead: expect.objectContaining({ readNumber: 1, completedReads: 1 }) });
+  });
+
   it('refreshes cached dashboard and statistics counts immediately after reading history and status date edits', async () => {
     const book = await createBook();
     let dashboardBaseline: number | undefined;
@@ -1331,6 +1411,7 @@ describe('Reading attempts main-flow simulation (docker e2e)', { timeout: TIMEOU
       occurredOn: '2026-01-02',
       origin: 'kobo',
       progress: 25,
+      readingThreshold: 5,
       finishThreshold: 98,
       strongRereadEvidence: false,
       meaningfulActivity: true,

@@ -21,6 +21,8 @@ import {
 import { parseKoreaderSessionId } from '../../common/utils/koreader-session-id.utils';
 import { resolveTimeZone, toDateKeyInTimeZone } from '../../common/utils/timezone.utils';
 import { DB } from '../../db';
+import { bookLastReadSql } from '../../db/book-last-read';
+import { readingSessionFormatSql } from '../../db/reading-session-format';
 import * as schema from '../../db/schema';
 import { bookFiles, books, koreaderSessionTombstones, readingSessionSyncCursors, readingSessions, userReadingDailyStats } from '../../db/schema';
 
@@ -496,7 +498,7 @@ export class ReadingSessionRepository {
     const conditions = [eq(readingSessions.bookId, bookId), eq(readingSessions.userId, userId)];
     if (dateFrom) conditions.push(gte(readingSessions.startedAt, new Date(dateFrom)));
     if (dateTo) conditions.push(lte(readingSessions.startedAt, new Date(dateTo)));
-    if (format) conditions.push(eq(sql`upper(${bookFiles.format})`, format.toUpperCase()));
+    if (format) conditions.push(eq(sql`upper(${readingSessionFormatSql()})`, format.toUpperCase()));
 
     const whereClause = and(...conditions);
 
@@ -527,7 +529,7 @@ export class ReadingSessionRepository {
           durationSeconds: readingSessions.durationSeconds,
           progressDelta: readingSessions.progressDelta,
           endProgress: readingSessions.endProgress,
-          format: sql<string | null>`nullif(${bookFiles.format}, '')`,
+          format: sql<string | null>`nullif(${readingSessionFormatSql()}, '')`,
           source: readingSessions.source,
           attemptId: readingSessions.attemptId,
           sessionType: readingSessions.sessionType,
@@ -549,6 +551,7 @@ export class ReadingSessionRepository {
           avgDurationSeconds: sql<number>`coalesce(avg(${readingSessions.durationSeconds}), 0)::int`,
           firstSessionAt: min(readingSessions.startedAt),
           lastSessionAt: max(readingSessions.startedAt),
+          lastReadAt: bookLastReadSql(sql`${bookId}`, userId).mapWith(readingSessions.startedAt),
           paceProgressDelta: sql<number>`coalesce(sum(${readingSessions.progressDelta}) filter (where ${readingSessions.progressDelta} > 0), 0)::real`,
           paceDurationSeconds: sql<number>`coalesce(sum(${readingSessions.durationSeconds}) filter (where ${readingSessions.progressDelta} > 0), 0)::int`,
         })
@@ -645,6 +648,7 @@ export class ReadingSessionRepository {
       avgDurationSeconds: statsRow?.avgDurationSeconds ?? 0,
       firstSessionAt: statsRow?.firstSessionAt ? (statsRow.firstSessionAt as Date).toISOString() : null,
       lastSessionAt: statsRow?.lastSessionAt ? (statsRow.lastSessionAt as Date).toISOString() : null,
+      lastReadAt: statsRow?.lastReadAt?.toISOString() ?? null,
       dailySummary,
       paceProgressDelta: statsRow?.paceProgressDelta ?? 0,
       paceDurationSeconds: statsRow?.paceDurationSeconds ?? 0,

@@ -7,6 +7,7 @@ import type { CustomMetadataBookValue } from "./custom-metadata";
 import type { CoverAspectRatio } from "./library";
 import { DEFAULT_FORMAT_PRIORITY } from "./library";
 import type { SeriesIndex } from "./series-index";
+import type { SeriesUnit } from "./series-unit";
 import type { EpubMediaOverlayCapability } from "./epub";
 import { READ_ALONG_FORMAT_PRIORITY } from "./format-priority";
 
@@ -15,8 +16,14 @@ import { READ_ALONG_FORMAT_PRIORITY } from "./format-priority";
 export const BOOK_FORMATS = DEFAULT_FORMAT_PRIORITY;
 export type BookFormat = (typeof BOOK_FORMATS)[number];
 
-/** Values accepted by the format filter. Read-along is an edition key, not a physical file format. */
-export const BOOK_FILTER_FORMATS = [...BOOK_FORMATS, READ_ALONG_FORMAT_PRIORITY] as const;
+/**
+ * Format filter value for EPUBs without media overlays. Only the filter knows it: no file is keyed,
+ * ranked or labelled by it, so a book whose only EPUB reads along never matches it.
+ */
+export const PLAIN_EPUB_FILTER_FORMAT = "epub:plain";
+
+/** Values accepted by the format filter. Read-along and plain EPUB are edition keys, not physical file formats. */
+export const BOOK_FILTER_FORMATS = [...BOOK_FORMATS, READ_ALONG_FORMAT_PRIORITY, PLAIN_EPUB_FILTER_FORMAT] as const;
 export type BookFilterFormat = (typeof BOOK_FILTER_FORMATS)[number];
 
 /** Exported as an ordered list too, so a form offering these cannot drift from what matches them. */
@@ -128,6 +135,10 @@ type BookMediaFile = Pick<BookFileRef, "format" | "role">;
 export const COVER_MEDIA = ["ebook", "audio"] as const;
 export type CoverMedium = (typeof COVER_MEDIA)[number];
 
+/** `size` on the cover route. `display` is a screen-sized copy for pages that show the cover large. */
+export const COVER_IMAGE_SIZES = ["display"] as const;
+export type CoverImageSize = (typeof COVER_IMAGE_SIZES)[number];
+
 type CoverMediaFile = BookMediaFile & {
   mediaOverlay?: Pick<EpubMediaOverlayCapability, "available"> | null;
   mediaOverlayAvailable?: boolean | null;
@@ -187,6 +198,10 @@ export type BookSeriesMembership = {
   seriesId: number;
   seriesName: string;
   seriesIndex: SeriesIndex | null;
+  /** Volume, chapter or issue; null when unclassified. Absent from servers without `series-units`. */
+  unit?: SeriesUnit | null;
+  /** The volume a chapter or issue belongs to, read from its file name. Absent from servers without `series-units`. */
+  volumeIndex?: SeriesIndex | null;
   displayOrder: number;
   /** Series-level, shared by every book in the series and by every user. */
   expectedBookCount: number | null;
@@ -196,13 +211,18 @@ export type BookCard = {
   id: number;
   libraryId?: number;
   status: string;
-  /** The frame of the cover the book shows by default, which follows its primary file's medium rather than its library. */
+  /** The frame of the cover the book shows by default, which follows its primary file's medium rather than its library. A read-along EPUB takes its library's shape. */
   coverAspectRatio: CoverAspectRatio;
   title: string | null;
   authors: string[];
   seriesId?: number | null;
   seriesName: string | null;
   seriesIndex: SeriesIndex | null;
+  /**
+   * The unit of the position in `seriesIndex`: the primary series, or the series a series page lists.
+   * Absent from servers without `series-units`.
+   */
+  seriesUnit?: SeriesUnit | null;
   seriesMemberships?: BookSeriesMembership[];
   files: BookFileRef[];
   publishedDate: string | null;
@@ -221,6 +241,8 @@ export type BookCard = {
   lockedFields: BookMetadataLockField[];
   subtitle: string | null;
   publisher: string | null;
+  /** The edition's own name, such as "Full Cast". Sent by servers with `book-editions`. */
+  editionName?: string | null;
   pageCount: number | null;
   isbn13: string | null;
   hardcoverId?: string | null;
@@ -346,6 +368,10 @@ export type BookDetail = {
   authors: { id: number; name: string; sortName: string | null }[];
   genres: string[];
   tags: string[];
+  /** `genres` with their ids, in the same order, for linking to genre pages. Absent from older servers. */
+  genreRefs?: { id: number; name: string }[];
+  /** `tags` with their ids, in the same order. Absent from older servers. */
+  tagRefs?: { id: number; name: string }[];
   files: BookDetailFile[];
   lastWrittenAt: string | null;
   metadataScore: number | null;
@@ -364,6 +390,12 @@ export type BookDetail = {
   linkGroupId?: number | null;
   /** This book is its link group's main book. False when it is not linked. Absent from older servers. */
   linkIsLead?: boolean;
+  /** This book drawn like its `linkedBooks`, to list it among them. Null when it is not linked; absent from servers without `book-editions`. */
+  linkSelf?: import("./book-link").LinkedBookSummary | null;
+  /** What sets this edition apart: "Full Cast", "25th Anniversary". Sent, null when unset, by servers with `book-editions`. */
+  editionName?: string | null;
+  /** The work's first publication year, which this edition's `publishedYear` may be later than. Sent like `editionName`. */
+  originalPublishedYear?: number | null;
 };
 
 export type BookCoverSlot = {
@@ -390,6 +422,7 @@ export type BookMetadataRefreshPreviewFields = {
   publisher?: string | null;
   publishedDate?: string | null;
   publishedYear?: number | null;
+  originalPublishedYear?: number | null;
   language?: string | null;
   pageCount?: number | null;
   seriesName?: string | null;

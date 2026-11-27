@@ -79,7 +79,7 @@ bookorbit/
 ## Prerequisites
 
 - **Node.js** >= 24 - [nodejs.org](https://nodejs.org)
-- **pnpm** >= 9 - `npm install -g pnpm` (or see [pnpm.io](https://pnpm.io/installation))
+- **pnpm** >= 12 - `npm install -g pnpm` (or see [pnpm.io](https://pnpm.io/installation))
 - **Docker** - [docs.docker.com/get-started/get-docker](https://docs.docker.com/get-started/get-docker/)
 
 ---
@@ -241,6 +241,7 @@ These are the variables you are most likely to need during development. See `ser
 | `APP_URL`             | Base URL for email links             | `http://localhost:6263`                                   |
 | `SWAGGER_ENABLED`     | Serve Swagger UI and OpenAPI JSON    | `false`                                                   |
 | `DISABLE_LOCAL_AUTH`  | Disable password authentication      | `false`                                                   |
+| `AI_ENCRYPTION_KEY`   | Encrypts AI provider keys            | unset; see [AI_PROVIDERS.md](AI_PROVIDERS.md)             |
 
 For a native server accessible only on this machine, set `HOST=127.0.0.1` in `server/.env`. `HOST` accepts an IPv4 or IPv6 address without a port or brackets, such as `::1` for IPv6 loopback. An unset or blank value keeps the existing `0.0.0.0` default. `PORT` continues to select the listen port.
 

@@ -211,8 +211,8 @@ export class BookConsolidationRepository {
   async replaceSeries(tx: ConsolidationTx, targetBookId: number, sourceBookId: number): Promise<void> {
     await tx.delete(schema.bookSeriesMemberships).where(eq(schema.bookSeriesMemberships.bookId, targetBookId));
     await tx.execute(sql`
-      insert into book_series_memberships (book_id, series_id, series_index, display_order, created_at, updated_at)
-      select ${targetBookId}::int, series_id, series_index, display_order, created_at, now()
+      insert into book_series_memberships (book_id, series_id, series_index, series_unit, series_volume_index, display_order, created_at, updated_at)
+      select ${targetBookId}::int, series_id, series_index, series_unit, series_volume_index, display_order, created_at, now()
       from book_series_memberships where book_id = ${sourceBookId}
     `);
   }
@@ -693,6 +693,8 @@ export class BookConsolidationRepository {
     await tx.execute(sql`update book_requests set target_book_id = ${k}, updated_at = now() where target_book_id = ${s} ${keep}`);
     await tx.execute(sql`update upload_sessions set target_book_id = ${k}, updated_at = now() where target_book_id = ${s}`);
     await tx.execute(sql`update upload_sessions set result_book_id = ${k}, updated_at = now() where result_book_id = ${s}`);
+    // A kept Book Dock original follows the book its copy now belongs to.
+    await tx.execute(sql`update book_dock_kept_files set book_id = ${k} where book_id = ${s}`);
     await tx.execute(sql`
       insert into book_duplicate_dismissals (user_id, kind, book_id_a, book_id_b, created_at)
       select user_id, kind,

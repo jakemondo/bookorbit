@@ -23,6 +23,13 @@ function boundValues(node: unknown, out: unknown[] = [], seen = new Set<unknown>
   return out;
 }
 
+/** Linked editions are one work, so a finished-book count must count work keys rather than rows. */
+function expectCountsWorks(db: { select: ReturnType<typeof vi.fn> }, field: string): void {
+  const text = flattenSql((db.select.mock.calls[0][0] as Record<string, unknown>)[field]);
+  expect(text).toContain('count(distinct');
+  expect(text).toContain('book_links');
+}
+
 function makeSelectChain(resolvedValue: unknown) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {};
   const methods = ['from', 'where', 'orderBy', 'limit', 'groupBy', 'innerJoin', 'leftJoin', 'having', 'as', '$dynamic', 'for'];
@@ -371,6 +378,7 @@ describe('AchievementRepository', () => {
       const result = await repo.countFinishedBooks(1);
 
       expect(result).toBe(5);
+      expectCountsWorks(db, 'value');
     });
 
     it('returns 0 when no books finished', async () => {
@@ -586,6 +594,9 @@ describe('AchievementRepository', () => {
       expect(result).toBe(true);
       const sqlText = flattenSql(db.execute.mock.calls[0][0]);
       expect(sqlText).toContain('bm.series_id');
+      // A series is complete when every work in it has a read edition, not every edition.
+      expect(sqlText).toContain('book_links');
+      expect(sqlText).toContain('COUNT(DISTINCT series_works.work_key) FILTER (WHERE series_works.is_read)');
     });
 
     it('returns false when no complete series exists', async () => {
@@ -607,6 +618,7 @@ describe('AchievementRepository', () => {
       const result = await repo.maxBooksPerAuthor(1);
 
       expect(result).toBe(8);
+      expectCountsWorks(db, 'cnt');
     });
 
     it('returns 0 when user has not finished any books', async () => {
@@ -742,6 +754,18 @@ describe('AchievementRepository', () => {
 
       expect(flattenSql(db.execute.mock.calls[0]![0])).toContain('AT TIME ZONE');
       expect(boundValues(db.execute.mock.calls[0]![0])).toContain('Pacific/Auckland');
+    });
+
+    it('getMaxPagesInADay counts sessions kept after their file was deleted, and still leaves out manual ones', async () => {
+      const db = { execute: vi.fn().mockResolvedValue({ rows: [{ max_pages: 10 }] }) };
+      const repo = makeRepo(db);
+
+      await repo.getMaxPagesInADay(1, 'UTC');
+
+      const sql = flattenSql(db.execute.mock.calls[0]![0]);
+      expect(sql).toContain('LEFT JOIN book_files bf ON bf.id = rs.book_file_id');
+      expect(sql).toContain('JOIN book_metadata bm ON bm.book_id = COALESCE(bf.book_id, rs.book_id)');
+      expect(sql).toContain('AND (bf.id IS NOT NULL OR rs.file_format_snapshot IS NOT NULL)');
     });
 
     it("getPagesOnDay windows the day in the reader's timezone", async () => {
@@ -1356,6 +1380,8 @@ describe('AchievementRepository', () => {
       expect(result).toBe(true);
       const sqlText = flattenSql(db.execute.mock.calls[0][0]);
       expect(sqlText).toContain('bm.series_id');
+      expect(sqlText).toContain('book_links');
+      expect(sqlText).toContain('HAVING COUNT(DISTINCT series_works.work_key) =');
     });
 
     it('returns false when no such series', async () => {
@@ -1399,6 +1425,7 @@ describe('AchievementRepository', () => {
       const result = await repo.countFinishedBooksByMaxPageCount(1, 200);
 
       expect(result).toBe(5);
+      expectCountsWorks(db, 'value');
     });
   });
 
@@ -1455,6 +1482,7 @@ describe('AchievementRepository', () => {
       const result = await repo.maxBooksPerGenre(1);
 
       expect(result).toBe(15);
+      expectCountsWorks(db, 'cnt');
     });
 
     it('returns 0 when no books have been read', async () => {
@@ -1545,6 +1573,7 @@ describe('AchievementRepository', () => {
       const result = await repo.countDistinctFinishedAnnotatedBooks(1);
 
       expect(result).toBe(5);
+      expectCountsWorks(db, 'value');
     });
   });
 
@@ -1557,6 +1586,7 @@ describe('AchievementRepository', () => {
       const result = await repo.countDistinctFinishedBooksInCollections(1);
 
       expect(result).toBe(7);
+      expectCountsWorks(db, 'value');
     });
   });
 

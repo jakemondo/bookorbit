@@ -42,6 +42,7 @@ function joined(overrides: Partial<BookRequestRow> = {}) {
     requesterUsername: 'bob',
     requesterName: 'Bob',
     decidedByUsername: null,
+    decidedByName: null,
     targetLibraryName: 'Books',
   };
 }
@@ -140,7 +141,7 @@ function makeService(
 
 describe('RequestFulfillmentService.grab', () => {
   it('records the attempt before calling the client, so an add never outlives its row', async () => {
-    const { service, downloads, adapter } = makeService();
+    const { service, downloads, adapter, events } = makeService();
 
     await service.grab(7, { magnet: MAGNET }, user());
 
@@ -148,6 +149,8 @@ describe('RequestFulfillmentService.grab', () => {
       expect.objectContaining({ requestId: 7, source: 'magnet', clientKey: INFO_HASH, status: 'queued', releaseTitle: 'Dune' }),
     );
     expect(downloads.create.mock.invocationCallOrder[0]).toBeLessThan(adapter.add.mock.invocationCallOrder[0]);
+    expect(events.emit).toHaveBeenCalledWith('book-request.download.queued');
+    expect(events.emit.mock.invocationCallOrder[0]).toBeGreaterThan(downloads.create.mock.invocationCallOrder[0]);
   });
 
   it('marks who grabbed it, because only an unattended attempt may be retried unattended', async () => {
@@ -168,6 +171,34 @@ describe('RequestFulfillmentService.grab', () => {
     const { service, adapter } = makeService();
     await service.grab(7, { magnet: `  ${MAGNET}\n` }, user());
     expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ magnet: MAGNET, clientKey: INFO_HASH }), expect.anything());
+  });
+
+  it('files a hand-pasted magnet under the default category, since nothing says it is a comic', async () => {
+    const { service, adapter } = makeService({
+      clients: {
+        resolveConfig: vi
+          .fn()
+          .mockResolvedValue({ id: 4, adapterType: 'qbittorrent', category: 'bookorbit', audiobookCategory: null, comicCategory: 'comics' }),
+      },
+    });
+
+    await service.grab(7, { magnet: MAGNET }, user());
+
+    expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit' }), expect.anything());
+  });
+
+  it('files a hand-uploaded .torrent of comic archives under the comic category, from its file list', async () => {
+    const { service, adapter } = makeService({
+      clients: {
+        resolveConfig: vi
+          .fn()
+          .mockResolvedValue({ id: 4, adapterType: 'qbittorrent', category: 'bookorbit', audiobookCategory: null, comicCategory: 'comics' }),
+      },
+    });
+
+    await service.grab(7, { torrentFileBase64: torrentBytes('saga-01.cbz').toString('base64'), torrentFileName: 'saga.torrent' }, user());
+
+    expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'comics' }), expect.anything());
   });
 
   /** The size of what the release carries; a magnet does not state one, so it stays null. */
@@ -391,6 +422,87 @@ describe('RequestFulfillmentService.grab from a picked release', () => {
         source: 'torrent_file',
       }),
     );
+  });
+
+  describe('category', () => {
+    const categories = {
+      id: 4,
+      adapterType: 'qbittorrent',
+      category: 'bookorbit',
+      audiobookCategory: 'bookorbit-audio',
+      comicCategory: 'bookorbit-comics',
+    };
+
+    function grabbing(release: object, torrent: Buffer, request: Partial<BookRequestRow> = {}, config: object = categories) {
+      return makeService({
+        requests: { findById: vi.fn().mockResolvedValue(joined(request)) },
+        clients: { resolveConfig: vi.fn().mockResolvedValue(config) },
+        releases: { find: vi.fn().mockReturnValue(release) },
+        indexerAdapter: { fetchTorrentFile: vi.fn().mockResolvedValue(torrent) },
+      });
+    }
+
+    it('files an audiobook request under the audiobook category', async () => {
+      const { service, adapter } = grabbing({ ...RELEASE, title: 'Dune [M4B]', format: 'm4b' }, torrentBytes('dune.m4b'), { mediaKind: 'audiobook' });
+
+      await service.grab(7, { indexerId: 9, releaseGuid: 'r-1' }, user());
+
+      expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit-audio' }), expect.anything());
+    });
+
+    it('files a comic archive on an ebook request under the comic category', async () => {
+      const { service, adapter } = grabbing({ ...RELEASE, title: 'Saga 01 [CBZ]', format: 'cbz' }, torrentBytes('saga-01.cbz'), {
+        mediaKind: 'ebook',
+      });
+
+      await service.grab(7, { indexerId: 9, releaseGuid: 'r-1' }, user());
+
+      expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit-comics' }), expect.anything());
+    });
+
+    it('trusts the files over the stated format: a CBZ-titled release of EPUBs is not a comic', async () => {
+      const { service, adapter } = grabbing({ ...RELEASE, title: 'Saga 01 [CBZ]', format: 'cbz' }, torrentBytes('saga-01.epub'), {
+        mediaKind: 'ebook',
+      });
+
+      await service.grab(7, { indexerId: 9, releaseGuid: 'r-1' }, user());
+
+      expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit' }), expect.anything());
+    });
+
+    it('keeps a release mixing comics and ebooks under the default category', async () => {
+      const { service, adapter } = grabbing({ ...RELEASE, format: 'cbz' }, multiFileTorrent(['Saga 01.cbz', 'Saga Companion.epub']), {
+        mediaKind: 'ebook',
+      });
+
+      await service.grab(7, { indexerId: 9, releaseGuid: 'r-1' }, user());
+
+      expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit' }), expect.anything());
+    });
+
+    it('files any other ebook release under the default category', async () => {
+      const { service, adapter } = grabbing(RELEASE, torrentBytes(), { mediaKind: 'ebook' });
+
+      await service.grab(7, { indexerId: 9, releaseGuid: 'r-1' }, user());
+
+      expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit' }), expect.anything());
+    });
+
+    it('falls back to the default category for a medium with no override', async () => {
+      const { service, adapter } = grabbing(
+        { ...RELEASE, title: 'Dune [M4B]', format: 'm4b' },
+        torrentBytes('dune.m4b'),
+        { mediaKind: 'audiobook' },
+        {
+          ...categories,
+          audiobookCategory: null,
+        },
+      );
+
+      await service.grab(7, { indexerId: 9, releaseGuid: 'r-1' }, user());
+
+      expect(adapter.add).toHaveBeenCalledWith(expect.objectContaining({ category: 'bookorbit' }), expect.anything());
+    });
   });
 
   it('keeps the release page and the request to review it on the attempt', async () => {
@@ -1210,6 +1322,23 @@ describe('RequestFulfillmentService.failDownload', () => {
       NotificationType.BookRequestFailed,
       expect.objectContaining({ meta: { requestId: 7, downloadId: 11 } }),
     );
+  });
+
+  /** The prose is still written, so a client that does not know the code keeps showing it. */
+  it('records a classified failure with its code and parameters beside the reason', async () => {
+    const { service, requests } = makeService();
+
+    await service.failDownload({ id: 11, requestId: 7 } as BookRequestDownloadRow, 'The downloaded content is not readable at /data/torrents/Dune', {
+      code: 'DOWNLOAD_UNREADABLE',
+      meta: { path: '/data/torrents/Dune' },
+    });
+
+    expect(requests.updateIf).toHaveBeenCalledWith(7, WORKER_WRITABLE_BOOK_REQUEST_STATUSES, {
+      status: 'failed',
+      statusReason: 'The downloaded content is not readable at /data/torrents/Dune',
+      failureCode: 'DOWNLOAD_UNREADABLE',
+      failureMeta: { path: '/data/torrents/Dune' },
+    });
   });
 
   it('drops a direct source URL when its attempt fails', async () => {

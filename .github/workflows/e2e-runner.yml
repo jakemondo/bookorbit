@@ -29,7 +29,6 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "26"
-  PNPM_VERSION: "11"
   E2E_DATABASE_URL: postgres://bookorbit:bookorbit@localhost:5432/bookorbit_e2e
   NODE_ENV: test
   JWT_SECRET: scanner-e2e-secret-1234
@@ -69,7 +68,6 @@ jobs:
         uses: ./.github/actions/setup-node-pnpm
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           prefetch: "true"
 
       - name: Install DjVuLibre tools
@@ -87,7 +85,7 @@ jobs:
 
       - name: Publish test report annotations
         if: always()
-        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2
+        uses: EnricoMi/publish-unit-test-result-action@da5b7be67623cd59bbbd1a0ce4f022050a55605f # v2.26.0
         with:
           check_name: ${{ inputs.check-name }}
           files: test-results/server/*-e2e-junit.xml

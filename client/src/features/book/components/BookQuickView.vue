@@ -23,6 +23,7 @@ import { useSafeHtml } from '@/features/book/composables/useSafeHtml'
 import BookCoverArtwork from './BookCoverArtwork.vue'
 import BookCoverSurface from './BookCoverSurface.vue'
 import { useI18n } from 'vue-i18n'
+import { primarySeriesUnit, seriesNameWithPosition } from '@/features/series/lib/series-unit-label'
 
 const { t } = useI18n()
 
@@ -70,8 +71,7 @@ const coverPlaceholderTitle = computed(() => (detail.value ? (detail.value.title
 
 const seriesLine = computed(() => {
   if (!detail.value?.seriesName) return null
-  const idx = detail.value.seriesIndex
-  return idx != null ? `${detail.value.seriesName} #${idx}` : detail.value.seriesName
+  return seriesNameWithPosition(t, detail.value.seriesName, detail.value.seriesIndex, primarySeriesUnit(detail.value))
 })
 
 const authorLine = computed(() => detail.value?.authors.map((a) => a.name).join(', ') ?? null)
@@ -372,7 +372,7 @@ function handleDelete() {
               <div class="border-t pt-4">
                 <div v-if="detail.description">
                   <div
-                    class="text-sm leading-relaxed text-foreground transition-all"
+                    class="description-content text-sm leading-relaxed text-foreground transition-all"
                     :class="descriptionExpanded ? '' : 'line-clamp-4'"
                     v-html="safeDescription"
                   />

@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { RouteLocationRaw } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight } from '@lucide/vue'
 import type { SeriesSummary } from '@bookorbit/types'
 import { formatNumber, formatRelativeFromNow } from '@/i18n/formatters'
 import { useCoverVersions } from '@/features/book/composables/useCoverVersions'
 import BookCoverArtwork from '@/features/book/components/BookCoverArtwork.vue'
+import ActivateLink from '@/components/ActivateLink.vue'
 import SeriesVolumeTrack from './SeriesVolumeTrack.vue'
 import SeriesLibraryChip from './SeriesLibraryChip.vue'
 import { parseAddedAt, seriesAuthorLine, seriesExtraAuthorCount, seriesRowFacts, seriesCoverSlots } from '../lib/series-summary'
+import { chapterGroupUnit, chapterNumberToken, gapListPreview, seriesPositionWithTitle, volumeNumberToken } from '../lib/series-unit-label'
 
 const props = defineProps<{ series: SeriesSummary }>()
 
@@ -24,10 +27,37 @@ const authorLine = computed(() => seriesAuthorLine(props.series))
 const extraAuthors = computed(() => seriesExtraAuthorCount(props.series))
 const covers = computed(() => seriesCoverSlots(props.series).slice(0, 3))
 
-const gapPreview = computed(() => {
-  const shown = props.series.gaps.map((gap) => `#${gap}`).join(', ')
-  const rest = props.series.gapCount - props.series.gaps.length
-  return rest > 0 ? t('series.gaps.previewMore', { shown, count: rest }) : shown
+const gapPreview = computed(() =>
+  gapListPreview(
+    t,
+    props.series.gaps.map((gap) => volumeNumberToken(t, gap, props.series.unitCounts)),
+    props.series.gapCount,
+  ),
+)
+
+type CaptionPart = { key: string; text: string; missing: boolean }
+
+/**
+ * A series with chapters reads "Missing Vol. 11 · 20 chapters · 12 read · missing Ch. 93": the
+ * volume ladder's own gaps first, then the chapters, which the ladder does not show.
+ */
+const chapterCaption = computed<CaptionPart[] | null>(() => {
+  const series = props.series
+  if (facts.value.chapters === 0) return null
+  const parts: CaptionPart[] = []
+  if (facts.value.volumeGapCount > 0)
+    parts.push({ key: 'volume-gaps', text: t('series.gaps.missingList', { list: gapPreview.value }), missing: true })
+  const summary =
+    chapterGroupUnit(series.unitCounts) === 'issue'
+      ? t('series.units.issuesRead', { count: facts.value.chapters, read: facts.value.readChapters })
+      : t('series.units.chaptersRead', { count: facts.value.chapters, read: facts.value.readChapters })
+  parts.push({ key: 'chapters', text: summary, missing: false })
+  const chapterGapCount = series.chapterGapCount ?? 0
+  if (chapterGapCount > 0) {
+    const tokens = (series.chapterGaps ?? []).map((gap) => chapterNumberToken(t, gap, series.unitCounts))
+    parts.push({ key: 'chapter-gaps', text: t('series.units.missingList', { list: gapListPreview(t, tokens, chapterGapCount) }), missing: true })
+  }
+  return parts
 })
 
 const publishedNote = computed(() => {
@@ -47,13 +77,12 @@ const caption = computed(() => {
 const nextKicker = computed(() => {
   if (facts.value.isComplete) return t('series.index.finished')
   if (facts.value.readingVolumes > 0) return t('series.index.reading')
-  return facts.value.readVolumes > 0 ? t('series.index.next') : t('series.index.start')
+  return facts.value.readTotal > 0 ? t('series.index.next') : t('series.index.start')
 })
 
 const nextValue = computed(() => {
   if (facts.value.isComplete || !props.series.nextTitle) return null
-  const number = props.series.nextIndex ? `#${props.series.nextIndex}` : null
-  return [number, props.series.nextTitle].filter(Boolean).join(' · ')
+  return seriesPositionWithTitle(t, props.series.nextIndex, props.series.nextUnit, props.series.nextTitle)
 })
 
 const addedLabel = computed(() => {
@@ -61,7 +90,13 @@ const addedLabel = computed(() => {
   return date ? formatRelativeFromNow(date) : '-'
 })
 
-const rowLabel = computed(() => t('series.card.label', { name: props.series.name, read: facts.value.readVolumes, total: facts.value.ownedVolumes }))
+const location = computed<RouteLocationRaw>(() => ({ name: 'series-detail', params: { seriesId: props.series.id } }))
+
+const rowLabel = computed(() =>
+  facts.value.chapters > 0
+    ? t('series.units.cardLabel', { name: props.series.name, read: facts.value.readTotal, total: facts.value.ownedTotal })
+    : t('series.card.label', { name: props.series.name, read: facts.value.readVolumes, total: facts.value.ownedVolumes }),
+)
 
 function handleOpen() {
   emit('open', props.series.id)
@@ -69,13 +104,12 @@ function handleOpen() {
 </script>
 
 <template>
-  <div
+  <ActivateLink
+    :to="location"
     class="series-index-row cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-    tabindex="0"
     role="row"
     :aria-label="rowLabel"
-    @click="handleOpen"
-    @keydown.enter="handleOpen"
+    @activate="handleOpen"
     @keydown.space.prevent="handleOpen"
   >
     <div class="cell-covers flex h-full min-w-0 items-center">
@@ -113,12 +147,25 @@ function handleOpen() {
       <div class="h-[9px] shrink-0">
         <SeriesVolumeTrack :series="series" />
       </div>
-      <div class="truncate text-[11px]" :class="series.gapCount > 0 ? 'text-destructive' : 'text-muted-foreground'">{{ caption }}</div>
+      <div v-if="chapterCaption" data-testid="series-row-caption" class="truncate text-[11px] text-muted-foreground">
+        <template v-for="(part, i) in chapterCaption" :key="part.key">
+          <span v-if="i > 0"> · </span>
+          <span :class="part.missing ? 'text-destructive' : undefined">{{ part.text }}</span>
+        </template>
+      </div>
+      <div
+        v-else
+        data-testid="series-row-caption"
+        class="truncate text-[11px]"
+        :class="series.gapCount > 0 ? 'text-destructive' : 'text-muted-foreground'"
+      >
+        {{ caption }}
+      </div>
     </div>
 
     <div class="cell-progress min-w-0 text-right tabular-nums">
       <div class="whitespace-nowrap text-[14px] font-semibold" :class="facts.isComplete ? 'text-success' : 'text-foreground'">
-        {{ formatNumber(facts.readVolumes) }}<span class="font-normal text-muted-foreground">/{{ formatNumber(facts.ownedVolumes) }}</span>
+        {{ formatNumber(facts.readTotal) }}<span class="font-normal text-muted-foreground">/{{ formatNumber(facts.ownedTotal) }}</span>
       </div>
       <div class="mt-px text-[11px] text-muted-foreground">{{ t('series.index.percent', { value: facts.percentRead }) }}</div>
     </div>
@@ -137,7 +184,7 @@ function handleOpen() {
     </div>
 
     <div class="cell-added truncate text-right text-[11.5px] tabular-nums text-muted-foreground">{{ addedLabel }}</div>
-  </div>
+  </ActivateLink>
 </template>
 
 <style scoped>

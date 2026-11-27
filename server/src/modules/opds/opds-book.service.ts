@@ -1,3 +1,4 @@
+import { patternSeriesMemberships } from '../../db/book-pattern-series';
 import { LibraryScopeService } from '../../common/library-scope/library-scope.service';
 import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { SQL, type SQLWrapper, type Subquery, and, count, eq, exists, gt, inArray, not, notExists, or, sql } from 'drizzle-orm';
@@ -21,7 +22,7 @@ import {
   userBookStatus,
 } from '../../db/schema';
 import { BookQueryBuilder } from '../book/book-query-builder.service';
-import { isAudioFormat, type ContentFilterRules, type GroupRule } from '@bookorbit/types';
+import { isAudioFormat, type ContentFilterRules, type GroupRule, type MetadataSeriesMembership } from '@bookorbit/types';
 import { rankFileRowsByBook, rankFilesByFormatPriority } from '../../common/utils/primary-file-selection.utils';
 import { buildContentFilterClauses } from '../../common/utils/content-filter-sql.utils';
 import { excludeAudioOnlyBooks } from '../../common/utils/audio-only-book-sql.utils';
@@ -41,6 +42,8 @@ type OpdsBookFilters = {
   readStatus?: 'unread' | 'reading' | 'finished';
   format?: string;
   ids?: number[];
+  // Books to leave out however many there are, such as those already on a reader's device.
+  excludeIds?: number[];
   excludeAudioOnly?: boolean;
 };
 
@@ -106,8 +109,16 @@ const OPDS_SORT_MAP: Record<Exclude<OpdsSortOrder, LastReadSortOrder>, SQL[]> = 
     sql`${bookMetadata.title} ASC NULLS LAST`,
     sql`${books.id} ASC`,
   ],
-  series_asc: [sql`${bookMetadata.seriesName} ASC NULLS LAST`, ...seriesIndexOrderBy(bookMetadata.seriesIndex, 'ASC'), sql`${books.id} ASC`],
-  series_desc: [sql`${bookMetadata.seriesName} DESC NULLS LAST`, ...seriesIndexOrderBy(bookMetadata.seriesIndex, 'DESC'), sql`${books.id} ASC`],
+  series_asc: [
+    sql`${bookMetadata.seriesName} ASC NULLS LAST`,
+    ...seriesIndexOrderBy(bookMetadata.seriesIndex, bookMetadata.seriesUnit, 'ASC'),
+    sql`${books.id} ASC`,
+  ],
+  series_desc: [
+    sql`${bookMetadata.seriesName} DESC NULLS LAST`,
+    ...seriesIndexOrderBy(bookMetadata.seriesIndex, bookMetadata.seriesUnit, 'DESC'),
+    sql`${books.id} ASC`,
+  ],
 };
 
 const READ_STATUS_BUCKETS = {
@@ -274,6 +285,8 @@ export interface OpdsManifestBookRow {
   language: string | null;
   publisher: string | null;
   publishedYear: number | null;
+  originalPublishedYear: number | null;
+  seriesMemberships: MetadataSeriesMembership[] | null;
   isbn10: string | null;
   isbn13: string | null;
   files: OpdsManifestFileRow[];
@@ -366,7 +379,10 @@ export class OpdsBookService {
     if (filters?.smartScopeId) {
       const where = await this.buildSmartScopeWhere(userId, filters.smartScopeId, accessibleIds, contentFilters, filters.q);
       if (!where) return null;
-      return { where: filters.excludeAudioOnly ? and(where, excludeAudioOnlyBooks())! : where };
+      const narrowed = [where];
+      if (filters.excludeIds?.length) narrowed.push(this.excludeBookIdsClause(filters.excludeIds));
+      if (filters.excludeAudioOnly) narrowed.push(excludeAudioOnlyBooks());
+      return { where: and(...narrowed)! };
     }
 
     const clauses: SQL[] = [inArray(books.libraryId, accessibleIds), eq(books.status, 'present')];
@@ -374,6 +390,8 @@ export class OpdsBookService {
     if (filters?.libraryId) clauses.push(eq(books.libraryId, filters.libraryId));
 
     if (filters?.ids) clauses.push(inArray(books.id, filters.ids));
+
+    if (filters?.excludeIds?.length) clauses.push(this.excludeBookIdsClause(filters.excludeIds));
 
     if (filters?.collectionId) {
       clauses.push(
@@ -415,6 +433,12 @@ export class OpdsBookService {
     if (filters?.excludeAudioOnly) clauses.push(excludeAudioOnlyBooks());
 
     return { where: and(...clauses)!, contextSeries: seriesFilter };
+  }
+
+  // One bound array however long the list: a parameter per id would run into Postgres's
+  // 65,535-parameter limit. Postgres hashes a constant array, so the check stays cheap.
+  private excludeBookIdsClause(ids: number[]): SQL {
+    return sql`${books.id} <> ALL(${sql.param(ids)}::int[])`;
   }
 
   // Content filters bind every reader but a superuser; the audio-only exclusion is the reader's own
@@ -471,6 +495,8 @@ export class OpdsBookService {
           language: bookMetadata.language,
           publisher: bookMetadata.publisher,
           publishedYear: bookMetadata.publishedYear,
+          originalPublishedYear: bookMetadata.originalPublishedYear,
+          seriesMemberships: patternSeriesMemberships,
           isbn10: bookMetadata.isbn10,
           isbn13: bookMetadata.isbn13,
         })
@@ -537,6 +563,8 @@ export class OpdsBookService {
         language: row.language,
         publisher: row.publisher,
         publishedYear: row.publishedYear,
+        originalPublishedYear: row.originalPublishedYear,
+        seriesMemberships: row.seriesMemberships,
         isbn10: row.isbn10,
         isbn13: row.isbn13,
         files: filesByBook.get(row.id) ?? [],
@@ -959,7 +987,7 @@ export class OpdsBookService {
   ): Promise<Map<number, { authorNames: string[]; memberStates: CatalogReadBucket[]; previews: OpdsPreviewBookRow[] }>> {
     if (seriesIds.length === 0) return new Map();
     const memberOrder = [
-      ...seriesIndexOrderBy(bookSeriesMemberships.seriesIndex, 'ASC'),
+      ...seriesIndexOrderBy(bookSeriesMemberships.seriesIndex, bookSeriesMemberships.seriesUnit, 'ASC'),
       sql`${bookMetadata.title} ASC NULLS LAST`,
       sql`${books.id} ASC`,
     ];
@@ -1280,6 +1308,7 @@ export class OpdsBookService {
     original = false,
   ): Promise<{
     id: number;
+    libraryId: number;
     contentVersion: string;
     mtime: Date | null;
     sizeBytes: number | null;
@@ -1293,6 +1322,7 @@ export class OpdsBookService {
     const candidates = await this.db
       .select({
         id: bookFiles.id,
+        libraryId: books.libraryId,
         absolutePath: bookFiles.absolutePath,
         updatedAt: bookFiles.updatedAt,
         mtime: bookFiles.mtime,
@@ -1335,6 +1365,7 @@ export class OpdsBookService {
 
     return {
       id: file.id,
+      libraryId: file.libraryId,
       contentVersion: file.updatedAt.toISOString(),
       mtime: file.mtime,
       sizeBytes: file.sizeBytes,
@@ -1622,7 +1653,11 @@ export class OpdsBookService {
 
   private buildContextSeriesOrder(sortOrder: OpdsSortOrder): SQL[] {
     const direction = sortOrder === 'series_desc' ? 'DESC' : 'ASC';
-    return [...seriesIndexOrderBy(bookSeriesMemberships.seriesIndex, direction), sql`${bookMetadata.title} ASC NULLS LAST`, sql`${books.id} ASC`];
+    return [
+      ...seriesIndexOrderBy(bookSeriesMemberships.seriesIndex, bookSeriesMemberships.seriesUnit, direction),
+      sql`${bookMetadata.title} ASC NULLS LAST`,
+      sql`${books.id} ASC`,
+    ];
   }
 
   private fetchContextSeriesRows(bookIds: number[], filter: SeriesFilter): Promise<ContextSeriesRow[]> {

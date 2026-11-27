@@ -4,11 +4,13 @@ import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { BOOK_FORMATS, isAudioFormat, type ContentFilterRules, type ReadStatus } from '@bookorbit/types';
 
 import { DB } from '../../db';
+import { workKeySql } from '../../db/book-work-key';
 import * as schema from '../../db/schema';
 import { audiobookProgress, bookFiles, bookMetadata, books, readingProgress, userBookStatus } from '../../db/schema';
 import { buildContentFilterClauses } from '../../common/utils/content-filter-sql.utils';
 import { excludeAudioOnlyBooks } from '../../common/utils/audio-only-book-sql.utils';
 import { seriesIndexSortKey } from '../../common/utils/series-index-sql.utils';
+import { seriesUnitRank } from '../../common/utils/series-unit.utils';
 
 type Db = NodePgDatabase<typeof schema>;
 type UpNextInSeriesRow = { id: number };
@@ -232,7 +234,7 @@ export class DashboardRepository {
     if (accessibleLibraryIds.length === 0) return 0;
     const cfClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
     const rows = await this.db
-      .select({ value: sql<number>`count(*)::int` })
+      .select({ value: sql<number>`count(distinct ${workKeySql(books.id)})::int` })
       .from(books)
       .innerJoin(userBookStatus, and(eq(userBookStatus.bookId, books.id), eq(userBookStatus.userId, userId)))
       .where(
@@ -252,17 +254,30 @@ export class DashboardRepository {
     if (accessibleLibraryIds.length === 0) return [];
 
     const cfClauses = [...(contentFilters ? buildContentFilterClauses(contentFilters, this.db) : []), ...selectionClauses(options)];
-    const rows = await this.db
-      .select({ id: books.id })
+    // Two editions of one work on the list show once, as the one marked most recently.
+    const marked = this.db
+      .select({
+        id: sql<number>`${books.id}`.as('id'),
+        updatedAt: sql<Date>`${userBookStatus.updatedAt}`.as('updated_at'),
+        workRank:
+          sql<number>`row_number() over (partition by ${workKeySql(books.id)} order by ${userBookStatus.updatedAt} desc, ${books.id} desc)`.as(
+            'work_rank',
+          ),
+      })
       .from(books)
       .innerJoin(userBookStatus, and(eq(userBookStatus.bookId, books.id), eq(userBookStatus.userId, userId)))
       .where(
         and(inArray(books.libraryId, accessibleLibraryIds), eq(books.status, 'present'), eq(userBookStatus.status, 'want_to_read'), ...cfClauses),
       )
-      .orderBy(desc(userBookStatus.updatedAt), desc(books.id))
+      .as('marked');
+    const rows = await this.db
+      .select({ id: marked.id })
+      .from(marked)
+      .where(sql`${marked.workRank} = 1`)
+      .orderBy(desc(marked.updatedAt), desc(marked.id))
       .limit(limit);
 
-    return rows.map((row) => row.id);
+    return rows.map((row) => Number(row.id));
   }
 
   async findUpNextInSeriesBookIds(
@@ -316,7 +331,9 @@ export class DashboardRepository {
           ${books.libraryId} as library_id,
 	          ${bookMetadata.seriesId} as series_id,
           ${bookMetadata.seriesIndex} as series_index,
+          ${seriesUnitRank(bookMetadata.seriesUnit)} as unit_rank,
           ${books.addedAt} as added_at,
+          ${workKeySql(books.id)} as work_key,
           ${mergedProgress} as current_progress,
           ${userBookStatus.status} as read_status,
           case
@@ -343,45 +360,67 @@ export class DashboardRepository {
           and ${bookMetadata.seriesIndex} is not null
           ${filterSql}
       ),
+      -- A volume counts as read, started or untouched by its whole work: finishing the audiobook
+      -- opens the next volume's ebook, and a started edition keeps the others off the shelf.
+      work_series_books as (
+        select
+          ssb.*,
+          bool_or(ssb.is_completed) over (partition by ssb.work_key) as work_completed,
+          max(ssb.completion_updated_at) over (partition by ssb.work_key) as work_completion_updated_at,
+          max(ssb.current_progress) over (partition by ssb.work_key) as work_progress,
+          bool_and(ssb.read_status is null or ssb.read_status in ('unread', 'want_to_read')) over (partition by ssb.work_key) as work_unstarted
+        from scoped_series_books ssb
+      ),
       ordered_series as (
         select
           ssb.id,
+          ssb.work_key,
+          ssb.work_progress,
+          ssb.work_unstarted,
           ssb.library_id,
 	          ssb.series_id,
           ssb.series_index,
+          ssb.unit_rank,
           ssb.added_at,
           ssb.current_progress,
           ssb.read_status,
-          ssb.is_completed,
-          ssb.completion_updated_at,
-          lag(ssb.is_completed) over (
-	            partition by ssb.library_id, ssb.series_id
+          ssb.work_completed as is_completed,
+          ssb.work_completion_updated_at as completion_updated_at,
+          lag(ssb.work_completed) over (
+	            partition by ssb.library_id, ssb.series_id, ssb.unit_rank
             order by ${seriesIndexSortKey(sql.raw('ssb.series_index'))} asc,
               ssb.series_index collate "C" asc, ssb.added_at asc, ssb.id asc
           ) as previous_is_completed,
-          lag(ssb.completion_updated_at) over (
-	            partition by ssb.library_id, ssb.series_id
+          lag(ssb.work_completion_updated_at) over (
+	            partition by ssb.library_id, ssb.series_id, ssb.unit_rank
             order by ${seriesIndexSortKey(sql.raw('ssb.series_index'))} asc,
               ssb.series_index collate "C" asc, ssb.added_at asc, ssb.id asc
           ) as previous_completion_updated_at
-        from scoped_series_books ssb
+        from work_series_books ssb
       ),
       next_candidates as (
-	        select distinct on (os.library_id, os.series_id)
+	        -- Volumes and chapters are separate reading lines: finishing v3 offers v4, never c4.
+	        select distinct on (os.library_id, os.series_id, os.unit_rank)
           os.id,
+          os.work_key,
           os.previous_completion_updated_at
         from ordered_series os
         where os.previous_is_completed = true
           and os.is_completed = false
-          and os.current_progress = 0
-          and (os.read_status is null or os.read_status in ('unread', 'want_to_read'))
+          and os.work_progress = 0
+          and os.work_unstarted
           ${candidateSql}
-	        order by os.library_id, os.series_id, ${seriesIndexSortKey(sql.raw('os.series_index'))} asc,
+	        order by os.library_id, os.series_id, os.unit_rank, ${seriesIndexSortKey(sql.raw('os.series_index'))} asc,
             os.series_index collate "C" asc, os.added_at asc, os.id asc
+      ),
+      work_candidates as (
+        select distinct on (nc.work_key) nc.id, nc.previous_completion_updated_at
+        from next_candidates nc
+        order by nc.work_key, nc.previous_completion_updated_at desc nulls last, nc.id asc
       )
-      select nc.id
-      from next_candidates nc
-      order by nc.previous_completion_updated_at desc nulls last, nc.id desc
+      select wc.id
+      from work_candidates wc
+      order by wc.previous_completion_updated_at desc nulls last, wc.id desc
       limit ${limit}
     `);
 
@@ -428,7 +467,8 @@ export class DashboardRepository {
       select 1
       from ${bookMetadata} candidate_metadata
       inner join ${bookMetadata} earlier_metadata on earlier_metadata.series_id = candidate_metadata.series_id
-        and ${seriesIndexSortKey(sql.raw('earlier_metadata.series_index'))} < ${seriesIndexSortKey(sql.raw('candidate_metadata.series_index'))}
+        and (${seriesUnitRank(sql.raw('earlier_metadata.series_unit'))}, ${seriesIndexSortKey(sql.raw('earlier_metadata.series_index'))})
+          < (${seriesUnitRank(sql.raw('candidate_metadata.series_unit'))}, ${seriesIndexSortKey(sql.raw('candidate_metadata.series_index'))})
       inner join ${books} earlier_book on earlier_book.id = earlier_metadata.book_id
       where candidate_metadata.book_id = ${books.id}
         and earlier_book.library_id = ${books.libraryId}

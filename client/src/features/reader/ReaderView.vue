@@ -52,7 +52,7 @@ import CbzReaderView from './cbz/CbzReaderView.vue'
 import AudiobookReaderView from './audiobook/AudiobookReaderView.vue'
 import type { ReaderState } from './epub/composables/useReaderState'
 import type { FoliateLocationContext, FoliateRenderer } from './epub/composables/useFoliate'
-import type { BookDetail, EpubMediaOverlayPlaylist, EpubReaderSettings } from '@bookorbit/types'
+import type { EpubMediaOverlayPlaylist, EpubReaderSettings } from '@bookorbit/types'
 import { findMatchingCfiRange } from './epub/utils'
 import { getFormatGroup } from '@bookorbit/types'
 import { resolveReaderResumeTarget } from '@/lib/reading-checkpoint'
@@ -68,12 +68,14 @@ const { coverUrl } = useCoverVersions()
 const bookId = Number(route.params.bookId)
 const fileId = Number(route.params.fileId)
 const fileFormat = (route.query.format as string) || 'epub'
-useReaderPageTitle(bookId)
+const bookMeta = useReaderPageTitle(bookId)
 const normalizedFileFormat = fileFormat.toLowerCase()
 const isAudioFormat = getFormatGroup(fileFormat) === 'audio'
 const isPdfFormat = fileFormat === 'pdf'
 const isDjvuFormat = normalizedFileFormat === 'djvu'
 const isComicFormat = fileFormat === 'cbz' || fileFormat === 'cbr' || fileFormat === 'cb7' || isDjvuFormat
+// PDF, comic and audiobook files open in their own readers, which own their lifecycle and their keys.
+const isSpecializedReader = isAudioFormat || isPdfFormat || isComicFormat
 const pageImageSource = isDjvuFormat ? 'djvu' : 'cbz'
 const isPeekMode = computed(() => {
   const mode = route.query.mode
@@ -186,20 +188,23 @@ function closeAnyPanel() {
   }
 }
 
-const { showHelpModal } = useReaderKeyboardShortcuts({
-  toggleSidebar: () => {
-    showSidebar.value = !showSidebar.value
+const { showHelpModal } = useReaderKeyboardShortcuts(
+  {
+    toggleSidebar: () => {
+      showSidebar.value = !showSidebar.value
+    },
+    toggleSearch: () => {
+      showSearch.value = !showSearch.value
+    },
+    toggleBookmark: handleToggleBookmark,
+    toggleFullscreen,
+    cycleFooterMode,
+    closePanel: closeAnyPanel,
+    goToStart: () => navigateToFraction(0),
+    goToEnd: () => navigateToFraction(1),
   },
-  toggleSearch: () => {
-    showSearch.value = !showSearch.value
-  },
-  toggleBookmark: handleToggleBookmark,
-  toggleFullscreen,
-  cycleFooterMode,
-  closePanel: closeAnyPanel,
-  goToStart: () => navigateToFraction(0),
-  goToEnd: () => navigateToFraction(1),
-})
+  { enabled: !isSpecializedReader },
+)
 
 function toggleHelpModal() {
   showHelpModal.value = !showHelpModal.value
@@ -257,7 +262,6 @@ function handleTranslate() {
   showTranslation.value = true
 }
 
-const bookMeta = ref<BookDetail | null>(null)
 const initialNavigationPending = ref(true)
 
 const {
@@ -943,18 +947,9 @@ setAnnotationClickHandler(handleAnnotationClick)
 onUnmounted(clearFoliateSource)
 
 onMounted(async () => {
-  // Specialized readers own their own progress/settings/loading lifecycle.
-  if (isAudioFormat || isPdfFormat || isComicFormat) return
+  if (isSpecializedReader) return
 
-  void Promise.all([
-    api(`/api/v1/books/${bookId}`)
-      .then((r) => r.json() as Promise<BookDetail>)
-      .then((b) => {
-        bookMeta.value = b
-      })
-      .catch(() => {}),
-    ...(isTtsAvailable ? [loadUserPreferences().catch(() => {})] : []),
-  ])
+  if (isTtsAvailable) void loadUserPreferences().catch(() => {})
 
   await customFonts.fetchAllFonts()
   await refreshFontFaces()

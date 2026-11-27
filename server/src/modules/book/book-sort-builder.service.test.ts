@@ -84,6 +84,12 @@ describe('BookSortBuilder', () => {
     expect(raw).toHaveBeenNthCalledWith(2, 'DESC');
   });
 
+  it('builds the first published year sort on its own column', () => {
+    const result = service.build([{ field: 'originalPublishedYear', dir: 'asc' }]) as unknown as Array<{ values: unknown[] }>;
+
+    expect(result[0]?.values[0]).toMatchObject({ name: 'original_published_year' });
+  });
+
   it('builds weighted relevance sorting when a query is present', () => {
     const raw = (sql as unknown as { raw: vi.Mock }).raw;
 
@@ -197,13 +203,13 @@ describe('BookSortBuilder', () => {
 
   // reading_progress.updated_at is frozen by the KOReader sync path, so ordering on it left
   // KOReader-only readers with an effectively random "Last Read" order.
-  it('orders lastReadAt on last_read_at rather than the row update timestamp', () => {
+  it('orders lastReadAt on the joined last-read row set, not a per-row subquery', () => {
     const result = service.build([{ field: 'lastReadAt', dir: 'desc' }], 42);
 
-    const text = (result[0] as unknown as { text: string }).text;
-    expect(text).toContain('SELECT max(rp.last_read_at)');
-    expect(text).not.toContain('rp.updated_at');
-    expect(result[0]?.values[0]).toBe(42);
+    expect(result[0]?.values).toEqual([
+      { type: 'raw', value: 'book_last_read.last_read_at' },
+      { type: 'raw', value: 'DESC' },
+    ]);
   });
 
   it('throws for finishedAt sort without userId', () => {
@@ -274,10 +280,9 @@ describe('BookSortBuilder', () => {
 
     const result = service.build([{ field: 'seriesIndex', dir: 'desc' }]);
 
-    expect(result).toHaveLength(4);
-    expect(raw).toHaveBeenNthCalledWith(1, 'DESC');
-    expect(raw).toHaveBeenNthCalledWith(2, 'DESC');
-    expect(raw).toHaveBeenNthCalledWith(3, 'DESC');
+    // Unit rank, number, literal tie break, then the series name.
+    expect(result).toHaveLength(5);
+    for (const call of [1, 2, 3, 4]) expect(raw).toHaveBeenNthCalledWith(call, 'DESC');
   });
 
   it('does not add series name fallback when series is already sorted', () => {
@@ -288,10 +293,11 @@ describe('BookSortBuilder', () => {
       { field: 'seriesIndex', dir: 'desc' },
     ]);
 
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect(raw).toHaveBeenNthCalledWith(1, 'ASC');
     expect(raw).toHaveBeenNthCalledWith(2, 'DESC');
     expect(raw).toHaveBeenNthCalledWith(3, 'DESC');
+    expect(raw).toHaveBeenNthCalledWith(4, 'DESC');
   });
 
   it('adds multiple sorts in the requested order', () => {

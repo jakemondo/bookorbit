@@ -1,11 +1,17 @@
 name: Release
 run-name: >-
-  ${{ github.event_name == 'workflow_dispatch' && format('Release - {0}', github.ref_name) || format('Release checks - PR #{0}', github.event.pull_request.number) }}
+  ${{ github.event_name == 'workflow_dispatch' && (inputs.tag != '' && format('Promote {0}', inputs.tag) || format('Release - {0}', github.ref_name)) || format('Release checks - PR #{0}', github.event.pull_request.number) }}
 
 on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build Docker images for, e.g. v3.10.0. Skips semantic-release. Leave empty for a normal release."
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'release' || format('pr-{0}', github.event.pull_request.number) }}
@@ -16,7 +22,6 @@ permissions: read-all
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "26"
-  PNPM_VERSION: "11"
 
 jobs:
   commitlint:
@@ -63,7 +68,6 @@ jobs:
         uses: ./.github/actions/setup-node-pnpm
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
 
       - name: Lint PR title
         shell: bash
@@ -78,8 +82,26 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: pnpm exec commitlint --config commitlint.config.cjs --from "$PR_BASE_SHA" --to "$PR_HEAD_SHA" --verbose
 
+      - name: Classify KOReader plugin translation pull request
+        id: plugin_l10n
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
+          script="scripts/koreader/classify-translation-pr.sh"
+          if git cat-file -e "$PR_BASE_SHA:$script" 2>/dev/null; then
+            is_translation="$(git show "$PR_BASE_SHA:$script" | bash -s -- "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+          else
+            is_translation="$(git show "$PR_HEAD_SHA:$script" | bash -s -- "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+          fi
+          echo "is_translation=$is_translation" >> "$GITHUB_OUTPUT"
+
       - name: Validate referenced issues exist
-        if: github.event.pull_request.user.login != 'dependabot[bot]' && steps.crowdin.outputs.is_crowdin != 'true'
+        if: github.event.pull_request.user.login != 'dependabot[bot]' && steps.crowdin.outputs.is_crowdin != 'true' && steps.plugin_l10n.outputs.is_translation != 'true'
         shell: bash
         env:
           GH_REPO: ${{ github.repository }}
@@ -187,7 +209,6 @@ jobs:
         uses: ./.github/actions/setup-node-pnpm
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
 
       - name: Semantic release dry run
         env:
@@ -199,7 +220,7 @@ jobs:
     name: Publish Release
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: write
@@ -207,9 +228,9 @@ jobs:
       pull-requests: write
       packages: read
     outputs:
-      published: ${{ steps.semantic.outputs.new_release_published }}
-      version: ${{ steps.semantic.outputs.new_release_version }}
-      tag: ${{ steps.semantic.outputs.new_release_git_tag }}
+      published: ${{ steps.semantic.outputs.new_release_published || steps.target.outputs.published }}
+      version: ${{ steps.semantic.outputs.new_release_version || steps.target.outputs.version }}
+      tag: ${{ steps.semantic.outputs.new_release_git_tag || steps.target.outputs.tag }}
     steps:
       - name: Guard against non-main branch
         shell: bash
@@ -226,11 +247,50 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify CI success for current SHA
+      - name: Resolve release target
+        id: target
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMIT_SHA: ${{ github.sha }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$INPUT_TAG" ]]; then
+            echo "sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag must look like vX.Y.Z. Got: ${INPUT_TAG}"
+            exit 1
+          fi
+          if ! TAG_SHA=$(git rev-parse --verify --quiet "refs/tags/${INPUT_TAG}^{commit}"); then
+            echo "::error::Tag ${INPUT_TAG} does not exist."
+            exit 1
+          fi
+          LATEST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          if [[ "$INPUT_TAG" != "$LATEST_TAG" ]]; then
+            echo "::error::Only the newest release tag (${LATEST_TAG}) can be promoted again. Promoting ${INPUT_TAG} would move :latest backwards."
+            exit 1
+          fi
+          if ! gh release view "$INPUT_TAG" --repo "$GH_REPO" --json tagName > /dev/null; then
+            echo "::error::No GitHub release exists for ${INPUT_TAG}."
+            exit 1
+          fi
+          echo "Promoting existing release ${INPUT_TAG} (${TAG_SHA}) without running semantic-release."
+          {
+            echo "sha=${TAG_SHA}"
+            echo "published=true"
+            echo "version=${INPUT_TAG#v}"
+            echo "tag=${INPUT_TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify CI success for release commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ steps.target.outputs.sha }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -245,11 +305,16 @@ jobs:
           fi
           echo "CI verification passed: ${success_count} successful run(s) found."
 
+      - name: Verify the KOReader plugin version moved with its changes
+        if: inputs.tag == ''
+        shell: bash
+        run: node scripts/koreader/check-plugin-version.mjs
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -258,7 +323,7 @@ jobs:
       - name: Verify SHA image exists in GHCR
         shell: bash
         env:
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ steps.target.outputs.sha }}
           IMAGE_NAME: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -271,13 +336,14 @@ jobs:
           echo "Image sha-${SHORT_SHA} verified in GHCR."
 
       - name: Set up Node.js and pnpm
+        if: inputs.tag == ''
         uses: ./.github/actions/setup-node-pnpm
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
 
       - name: Run semantic-release
         id: semantic
+        if: inputs.tag == ''
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -336,10 +402,10 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}

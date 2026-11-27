@@ -398,6 +398,29 @@ describe('SeriesService', () => {
       });
     });
 
+    it('counts the chapters read beside the volumes', async () => {
+      seriesRepo.findDetail.mockResolvedValue({
+        id: 42,
+        name: 'Mixed',
+        bookCount: 4,
+        readCount: 3,
+        authors: [],
+        indices: ['1', '2', '80', '81'],
+        expectedBookCount: null,
+        members: [
+          { seriesIndex: '1', unit: 'volume', status: 'read' },
+          { seriesIndex: '2', unit: 'volume', status: null },
+          { seriesIndex: '80', unit: 'chapter', status: 'read' },
+          { seriesIndex: '81', unit: 'issue', status: 'read' },
+        ],
+      });
+      seriesRepo.findBookIds.mockResolvedValue({ bookIds: [], total: 4 });
+
+      const result = await service.findBooks(reqUser(), 42, {});
+
+      expect(result.seriesInfo).toMatchObject({ ownedVolumeCount: 2, readVolumeCount: 1, chapterReadCount: 2 });
+    });
+
     it('preserves book order from repository', async () => {
       seriesRepo.findDetail.mockResolvedValue({ id: 42, name: 'Test', bookCount: 2, readCount: 0, authors: [], indices: ['1', '2'] });
       seriesRepo.findBookIds.mockResolvedValue({ bookIds: [20, 10], total: 2 });
@@ -528,6 +551,57 @@ describe('SeriesService', () => {
       seriesRepo.findBookIds.mockResolvedValue({ bookIds: [], total: 0 });
 
       await expect(service.findBooks(reqUser(), 42, {})).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('libraries hidden from Series', () => {
+    const hidingUser = () => ({ ...reqUser(), settings: { libraryVisibility: { hidden: { series: [2] } } } });
+    const dune = { id: 42, name: 'Dune', bookCount: 1, readCount: 0, authors: [], indices: ['1'] };
+
+    it('lists series from shown libraries only', async () => {
+      seriesRepo.findPage.mockResolvedValue({ items: [], total: 0, facets: EMPTY_FACETS, page: 0, size: 50 });
+
+      await service.findAll(hidingUser(), {});
+
+      expect(seriesRepo.findPage).toHaveBeenCalledWith(expect.objectContaining({ libraryIds: [1] }));
+    });
+
+    it('still lists a hidden library picked in the library filter', async () => {
+      seriesRepo.findPage.mockResolvedValue({ items: [], total: 0, facets: EMPTY_FACETS, page: 0, size: 50 });
+
+      await service.findAll(hidingUser(), { libraryId: 2 });
+
+      expect(seriesRepo.findPage).toHaveBeenCalledWith(expect.objectContaining({ libraryIds: [2] }));
+    });
+
+    it('counts series the way the Series page lists them', async () => {
+      seriesRepo.countSeries.mockResolvedValue(3);
+
+      await service.countAll(hidingUser());
+
+      expect(seriesRepo.countSeries).toHaveBeenCalledWith(expect.objectContaining({ libraryIds: [1] }));
+    });
+
+    it('shows a mixed series with the books from shown libraries', async () => {
+      seriesRepo.findDetail.mockResolvedValue(dune);
+      seriesRepo.findBookIds.mockResolvedValue({ bookIds: [], total: 0 });
+
+      await service.findBooks(hidingUser(), 42, {});
+
+      expect(seriesRepo.findDetail).toHaveBeenCalledTimes(1);
+      expect(seriesRepo.findDetail).toHaveBeenCalledWith(expect.objectContaining({ libraryIds: [1] }));
+      expect(seriesRepo.findBookIds).toHaveBeenCalledWith(expect.objectContaining({ libraryIds: [1] }));
+    });
+
+    it('opens a series kept only in hidden libraries with all its books', async () => {
+      seriesRepo.findDetail.mockResolvedValueOnce(null).mockResolvedValueOnce(dune);
+      seriesRepo.findBookIds.mockResolvedValue({ bookIds: [], total: 0 });
+
+      const result = await service.findBooks(hidingUser(), 42, {});
+
+      expect(result.seriesInfo.name).toBe('Dune');
+      expect(seriesRepo.findDetail).toHaveBeenLastCalledWith(expect.objectContaining({ libraryIds: [1, 2] }));
+      expect(seriesRepo.findBookIds).toHaveBeenLastCalledWith(expect.objectContaining({ libraryIds: [1, 2] }));
     });
   });
 
@@ -663,7 +737,7 @@ describe('SeriesService', () => {
       seriesRepo.findNextReadableBook.mockResolvedValue(row);
 
       await expect(service.findNextBook(reqUser(), 42, 90, { formatGroup: 'cbx' })).resolves.toEqual({
-        next: { bookId: 91, fileId: 501, format: 'cbr', title: 'Issue 10', seriesIndex: '10' },
+        next: { bookId: 91, fileId: 501, format: 'cbr', title: 'Issue 10', seriesIndex: '10', seriesUnit: null },
       });
     });
 

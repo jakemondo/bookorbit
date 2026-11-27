@@ -2,7 +2,6 @@ import { computed, reactive, readonly, ref } from 'vue'
 import { api } from '@/lib/api'
 import { readApiErrorDetail } from '@/lib/api-error'
 import {
-  FORMAT_TO_GROUP,
   isKnownMetadataProviderKey,
   type BookCommunityRating,
   type BookDetail,
@@ -10,13 +9,20 @@ import {
   type BookMetadataSaveResult,
   type CustomMetadataBookValue,
   type CustomMetadataBookValueInput,
+  type SeriesUnit,
 } from '@bookorbit/types'
+import { hasAudioFile, hasReadAlongFile } from '@/features/book/lib/file-capabilities'
 
 export type EditableSeriesMembership = {
   seriesName: string
   seriesIndex: string | null
   /** Series-level: saving it changes the total for every book in the series and every user. */
   expectedBookCount: number | null
+  /**
+   * Volume, chapter or issue, null for none. Left undefined where nothing edits it, such as bulk
+   * edit, so the payload omits it and the server keeps each book's saved unit.
+   */
+  unit?: SeriesUnit | null
 }
 
 const ROOT_FIELDS = [
@@ -26,6 +32,8 @@ const ROOT_FIELDS = [
   'publisher',
   'publishedDate',
   'publishedYear',
+  'editionName',
+  'originalPublishedYear',
   'language',
   'pageCount',
   'isbn10',
@@ -83,7 +91,12 @@ export function normalizeSeriesMemberships(values: readonly EditableSeriesMember
     const key = seriesName.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ seriesName, seriesIndex: value.seriesIndex ?? null, expectedBookCount: value.expectedBookCount ?? null })
+    out.push({
+      seriesName,
+      seriesIndex: value.seriesIndex ?? null,
+      expectedBookCount: value.expectedBookCount ?? null,
+      ...(value.unit !== undefined ? { unit: value.unit } : {}),
+    })
   }
   return out
 }
@@ -96,10 +109,11 @@ function seriesMembershipsFromBook(book: BookDetail): EditableSeriesMembership[]
         seriesName: membership.seriesName,
         seriesIndex: membership.seriesIndex,
         expectedBookCount: membership.expectedBookCount ?? null,
+        unit: membership.unit ?? null,
       })),
     )
   }
-  return book.seriesName ? [{ seriesName: book.seriesName, seriesIndex: book.seriesIndex, expectedBookCount: null }] : []
+  return book.seriesName ? [{ seriesName: book.seriesName, seriesIndex: book.seriesIndex, expectedBookCount: null, unit: null }] : []
 }
 
 function changedCustomMetadataPayload(
@@ -155,6 +169,8 @@ export function useMetadataEditor() {
     publisher: null as string | null,
     publishedDate: null as string | null,
     publishedYear: null as number | null,
+    editionName: null as string | null,
+    originalPublishedYear: null as number | null,
     language: null as string | null,
     pageCount: null as number | null,
     communityRatings: [] as BookCommunityRating[],
@@ -203,6 +219,7 @@ export function useMetadataEditor() {
 
   const snapshot = ref(JSON.stringify(form))
   const includeAudioMetadata = ref(false)
+  const includeNarrators = ref(false)
   let loadedBookId: number | null = null
 
   const isDirty = computed(() => JSON.stringify(form) !== snapshot.value)
@@ -214,6 +231,8 @@ export function useMetadataEditor() {
     form.publisher = book.publisher
     form.publishedDate = book.publishedDate
     form.publishedYear = book.publishedYear
+    form.editionName = book.editionName ?? null
+    form.originalPublishedYear = book.originalPublishedYear ?? null
     form.language = book.language
     form.pageCount = book.pageCount
     form.communityRatings = [...book.communityRatings]
@@ -260,7 +279,8 @@ export function useMetadataEditor() {
     form.comicTeams = cm?.teams ?? []
     form.comicLocations = cm?.locations ?? []
     form.customMetadata = (book.customMetadata ?? []).map((field) => ({ ...field }))
-    includeAudioMetadata.value = book.audioMetadata != null || book.files.some((f) => f.format != null && FORMAT_TO_GROUP[f.format] === 'audio')
+    includeAudioMetadata.value = hasAudioFile(book.files)
+    includeNarrators.value = includeAudioMetadata.value || hasReadAlongFile(book.files) || (book.audioMetadata?.narrators.length ?? 0) > 0
     snapshot.value = JSON.stringify(form)
     loadedBookId = book.id
     error.value = null
@@ -311,16 +331,15 @@ export function useMetadataEditor() {
       payload.comicMetadata = comicMetadata
     }
 
-    if (includeAudioMetadata.value) {
-      const audioMetadata: Record<string, unknown> = {}
-      for (const [payloadKey, formKey] of Object.entries(AUDIO_FIELDS)) {
-        if (JSON.stringify(form[formKey]) !== JSON.stringify(previous[formKey])) {
-          audioMetadata[payloadKey] = form[formKey]
-        }
+    const audioMetadata: Record<string, unknown> = {}
+    for (const [payloadKey, formKey] of Object.entries(AUDIO_FIELDS)) {
+      const included = formKey === 'narrators' ? includeNarrators.value : includeAudioMetadata.value
+      if (included && JSON.stringify(form[formKey]) !== JSON.stringify(previous[formKey])) {
+        audioMetadata[payloadKey] = form[formKey]
       }
-      if (Object.keys(audioMetadata).length > 0) {
-        payload.audioMetadata = audioMetadata
-      }
+    }
+    if (Object.keys(audioMetadata).length > 0) {
+      payload.audioMetadata = audioMetadata
     }
 
     const externalIds = changedExternalProviderIds(form.externalProviderIds, previous.externalProviderIds)
@@ -373,5 +392,16 @@ export function useMetadataEditor() {
     }
   }
 
-  return { form, saving, error, isDirty, includeAudioMetadata: readonly(includeAudioMetadata), load, syncFromBook, reset, save }
+  return {
+    form,
+    saving,
+    error,
+    isDirty,
+    includeAudioMetadata: readonly(includeAudioMetadata),
+    includeNarrators: readonly(includeNarrators),
+    load,
+    syncFromBook,
+    reset,
+    save,
+  }
 }

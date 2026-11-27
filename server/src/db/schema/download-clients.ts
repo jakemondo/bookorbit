@@ -31,6 +31,10 @@ export const downloadClients = pgTable(
 
     /** Tags our torrents in the client so BookOrbit only ever touches its own. */
     category: varchar('category', { length: 100 }).notNull().default('bookorbit'),
+    /** Files audiobook grabs under their own category. Null keeps them under `category`. */
+    audiobookCategory: varchar('audiobook_category', { length: 100 }),
+    /** Files releases in a comic archive format under their own category. Null keeps them under `category`. */
+    comicCategory: varchar('comic_category', { length: 100 }),
     useHardlinks: boolean('use_hardlinks').notNull().default(true),
     /** Drop a finished Usenet job and its folder once the Book Dock holds the import. */
     removeCompletedDownloads: boolean('remove_completed_downloads').notNull().default(false),
@@ -148,6 +152,8 @@ export const bookRequestDownloads = pgTable(
     releaseUnits: jsonb('release_units').$type<ReleaseUnitChoice[]>(),
 
     errorMessage: text('error_message'),
+    /** A stable reason for a failed attempt where one is known, such as `removed` for one a person cancelled. */
+    failureCode: varchar('failure_code', { length: 30 }),
     grabbedAt: timestamp('grabbed_at', { withTimezone: true }),
     /** Last tick that saw bytes move. The stall watchdog reads this, not `updatedAt`. */
     lastProgressAt: timestamp('last_progress_at', { withTimezone: true }),

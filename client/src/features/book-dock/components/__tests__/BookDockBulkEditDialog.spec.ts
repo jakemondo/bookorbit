@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { i18n } from '@/i18n'
+import InputWithSuggestions from '@/components/ui/InputWithSuggestions.vue'
 import BookDockBulkEditDialog from '../BookDockBulkEditDialog.vue'
 
 const api = vi.fn<(...args: unknown[]) => Promise<Response>>()
@@ -65,6 +66,34 @@ describe('BookDockBulkEditDialog', () => {
     })
   })
 
+  // Issue #1721: picking an existing series avoids filing a new one under a misspelt name.
+  it('suggests series already in the library and applies the one picked', async () => {
+    api.mockImplementation(async (url) =>
+      String(url).startsWith('/api/v1/metadata/series?')
+        ? ({ ok: true, json: async () => [{ name: 'The Expanse' }] } as Response)
+        : ({ ok: true, json: async () => ({ total: 2, updated: 2, failed: 0 }) } as Response),
+    )
+    mountDialog()
+    const seriesInput = () => wrapper.getComponent(InputWithSuggestions)
+
+    expect(seriesInput().props('disabled')).toBe(true)
+    await fieldRow('Series').get('input[type="checkbox"]').trigger('change')
+    expect(seriesInput().props('disabled')).toBe(false)
+
+    await expect(seriesInput().props('searchFn')('expanse')).resolves.toEqual(['The Expanse'])
+    expect(api).toHaveBeenCalledWith('/api/v1/metadata/series?q=expanse')
+
+    seriesInput().vm.$emit('update:modelValue', 'The Expanse')
+    await flushPromises()
+    expect(fieldInput('Series').element.value).toBe('The Expanse')
+
+    await applyButton().trigger('click')
+    await flushPromises()
+
+    const [, init] = api.mock.calls.find(([url]) => url === '/api/v1/book-dock/files/bulk-edit') as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toMatchObject({ fields: { seriesName: 'The Expanse' }, enabledFields: ['seriesName'] })
+  })
+
   it('keeps an identifier field disabled until it is enabled', async () => {
     mountDialog()
 
@@ -72,6 +101,17 @@ describe('BookDockBulkEditDialog', () => {
 
     await fieldRow('ISBN-13').get('input[type="checkbox"]').trigger('change')
     expect(fieldInput('ISBN-13').element.disabled).toBe(false)
+  })
+
+  // Issue #1472: tags could only be set on a book after it left the dock.
+  it('applies tags as a list, merged into what each file has by default', async () => {
+    mountDialog()
+
+    await enableAndType('Tags', 'type:manga, Favourites')
+    await applyButton().trigger('click')
+    await flushPromises()
+
+    expect(sentBody()).toMatchObject({ fields: { tags: ['type:manga', 'Favourites'] }, enabledFields: ['tags'], mergeArrays: true })
   })
 
   it('leaves text fields that are not identifiers untouched', async () => {

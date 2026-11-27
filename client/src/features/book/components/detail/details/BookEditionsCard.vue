@@ -4,9 +4,10 @@ import { RotateCcw } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import type { BookDetail } from '@bookorbit/types'
 import { formatBytes } from '@/lib/formatting'
-import { formatNumber, formatPercent } from '@/i18n/formatters'
+import { formatNumber } from '@/i18n/formatters'
 import BookFormatChip from '@/features/book/components/BookFormatChip.vue'
 import { bookFormatEntries, formatKeyName, type BookFormatEntry } from '@/features/book/lib/book-formats'
+import { progressPercentLabel } from '@/features/book/lib/progress-percent'
 
 export interface EditionProgress {
   /** The edition's format key, as `bookFormatEntries` gives it. */
@@ -57,12 +58,8 @@ function formatDuration(seconds: number): string {
   return hours > 0 ? t('book.detail.details.durationHm', { hours, minutes }) : t('book.detail.details.durationM', { minutes })
 }
 
-/** Mirrors the detail tab's rule: never round a live position down to 0% or up to 100%. */
 function progressLabel(percentage: number): string {
-  const clamped = Math.max(0, Math.min(100, percentage))
-  if (clamped > 0 && clamped < 1) return t('book.detail.details.percentUnderOne')
-  if (clamped > 99 && clamped < 100) return t('book.detail.details.percentOverNinetyNine')
-  return formatPercent(Math.round(clamped) / 100)
+  return progressPercentLabel(percentage, t)
 }
 
 function rowMeasure(row: BookFormatEntry): string {
@@ -73,10 +70,10 @@ function rowMeasure(row: BookFormatEntry): string {
 </script>
 
 <template>
-  <section class="rounded-xl border border-border bg-card px-3.5 py-3" :aria-label="t('book.detail.details.editions')">
+  <section class="rounded-xl border border-border bg-card px-3.5 py-3" :aria-label="t('book.detail.details.formatsCard')">
     <div class="flex items-baseline gap-2">
       <h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {{ t('book.detail.details.editions') }}
+        {{ t('book.detail.details.formatsCard') }}
       </h3>
       <p class="ml-auto text-[11px] tabular-nums text-muted-foreground">
         {{ t('book.detail.details.editionsSummary', { count: rows.length, size: formatBytes(totalBytes) }) }}

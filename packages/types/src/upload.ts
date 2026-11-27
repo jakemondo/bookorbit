@@ -22,6 +22,9 @@ export const UPLOAD_SUPPORTED_FORMATS = [
 
 export type UploadSupportedFormat = (typeof UPLOAD_SUPPORTED_FORMATS)[number];
 
+/** Bytes in each upload-session chunk. The web client sends a larger file as a session, in chunks this size. */
+export const UPLOAD_CHUNK_SIZE_BYTES = 16 * 1_024 * 1_024;
+
 export const UploadErrorCode = {
   TooLarge: "UPLOAD_TOO_LARGE",
   Empty: "UPLOAD_EMPTY",
@@ -41,8 +44,14 @@ export const UploadErrorCode = {
 
 export type UploadErrorCode = (typeof UploadErrorCode)[keyof typeof UploadErrorCode];
 
+/**
+ * Where an upload goes. `book_dock` with a `libraryId` lands in that library's dock; send it only to
+ * a server that lists the dock in `GET /book-dock/docks`, because older servers drop it silently.
+ */
 export type UploadTarget =
-  { kind: "library"; libraryId: number; folderId?: number } | { kind: "existing_book"; bookId: number } | { kind: "book_dock" };
+  | { kind: "library"; libraryId: number; folderId?: number }
+  | { kind: "existing_book"; bookId: number }
+  | { kind: "book_dock"; libraryId?: number };
 
 export type UploadSessionStatus = "receiving" | "processing" | "completed" | "failed" | "cancelled" | "expired";
 

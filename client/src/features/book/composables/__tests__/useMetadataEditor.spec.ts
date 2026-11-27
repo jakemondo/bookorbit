@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MetadataProviderKey, type BookDetail } from '@bookorbit/types'
-import { useMetadataEditor } from '../useMetadataEditor'
+import { normalizeSeriesMemberships, useMetadataEditor } from '../useMetadataEditor'
 
 const apiMock = vi.hoisted(() => vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>>())
 
@@ -133,6 +133,73 @@ describe('useMetadataEditor', () => {
     })
   })
 
+  it('edits narrators but not duration or abridged on a read-along EPUB with no audio files', async () => {
+    const book = makeBook({
+      files: [
+        {
+          id: 11,
+          format: 'epub',
+          role: 'primary',
+          sizeBytes: 10,
+          absolutePath: '/books/test.epub',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          filename: 'test.epub',
+          durationSeconds: null,
+          mediaOverlay: { available: true, durationSeconds: 3600 },
+        },
+      ],
+    })
+    apiMock.mockResolvedValue({ ok: true, json: async () => book })
+
+    const { form, includeAudioMetadata, includeNarrators, load, save } = useMetadataEditor()
+    load(book)
+    expect(includeNarrators.value).toBe(true)
+    expect(includeAudioMetadata.value).toBe(false)
+
+    form.narrators = ['Narrator One']
+    form.durationSeconds = 3600
+    form.abridged = true
+    await save(book.id, [])
+
+    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    const payload = JSON.parse(String(req.body)) as { metadata: { audioMetadata?: Record<string, unknown> } }
+    expect(payload.metadata.audioMetadata).toEqual({ narrators: ['Narrator One'] })
+  })
+
+  it('keeps narrators editable on a plain EPUB that already has them', () => {
+    const book = makeBook({
+      audioMetadata: {
+        narrators: [{ id: 2, name: 'Narrator One', sortName: null, displayOrder: 0 }],
+        durationSeconds: null,
+        abridged: false,
+        chapters: null,
+      },
+    })
+
+    const { form, includeAudioMetadata, includeNarrators, load } = useMetadataEditor()
+    load(book)
+
+    expect(form.narrators).toEqual(['Narrator One'])
+    expect(includeNarrators.value).toBe(true)
+    expect(includeAudioMetadata.value).toBe(false)
+  })
+
+  it('leaves narrators out for a plain EPUB without any', async () => {
+    const book = makeBook()
+    apiMock.mockResolvedValue({ ok: true, json: async () => book })
+
+    const { form, includeNarrators, load, save } = useMetadataEditor()
+    load(book)
+    expect(includeNarrators.value).toBe(false)
+
+    form.narrators = ['Narrator One']
+    await save(book.id, [])
+
+    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    const { metadata } = JSON.parse(String(req.body)) as { metadata: Record<string, unknown> }
+    expect(metadata.audioMetadata).toBeUndefined()
+  })
+
   it('sends only changed fields in the metadata payload', async () => {
     const book = makeBook({ title: 'Original Title', publisher: 'Original Publisher' })
     apiMock.mockResolvedValue({ ok: true, json: async () => book })
@@ -149,6 +216,119 @@ describe('useMetadataEditor', () => {
       metadata: { publisher: 'Updated Publisher' },
       lockedFields: [],
     })
+  })
+
+  describe('series unit', () => {
+    const memberships = [
+      {
+        seriesId: 7,
+        seriesName: 'Harbor of Lanterns',
+        seriesIndex: '87',
+        unit: 'chapter' as const,
+        volumeIndex: '9',
+        displayOrder: 0,
+        expectedBookCount: null,
+      },
+      { seriesId: 8, seriesName: 'Lantern Tales', seriesIndex: '2', unit: null, volumeIndex: null, displayOrder: 1, expectedBookCount: 4 },
+    ]
+
+    async function savedMemberships(edit: (form: ReturnType<typeof useMetadataEditor>['form']) => void) {
+      const book = makeBook({ seriesName: 'Harbor of Lanterns', seriesIndex: '87', seriesMemberships: memberships })
+      apiMock.mockResolvedValue({ ok: true, json: async () => book })
+      const editor = useMetadataEditor()
+      editor.load(book)
+      edit(editor.form)
+      await editor.save(book.id, [])
+      const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+      return (JSON.parse(String(req.body)) as { metadata: Record<string, unknown> }).metadata.seriesMemberships
+    }
+
+    it('loads each membership with its unit', () => {
+      const editor = useMetadataEditor()
+      editor.load(makeBook({ seriesName: 'Harbor of Lanterns', seriesIndex: '87', seriesMemberships: memberships }))
+
+      expect(editor.form.seriesMemberships.map((membership) => membership.unit)).toEqual(['chapter', null])
+    })
+
+    it('sends a changed unit with every membership, keeping the unchanged ones', async () => {
+      const sent = await savedMemberships((form) => {
+        form.seriesMemberships = form.seriesMemberships.map((membership, index) => (index === 1 ? { ...membership, unit: 'volume' } : membership))
+      })
+
+      expect(sent).toEqual([
+        { seriesName: 'Harbor of Lanterns', seriesIndex: '87', expectedBookCount: null, unit: 'chapter' },
+        { seriesName: 'Lantern Tales', seriesIndex: '2', expectedBookCount: 4, unit: 'volume' },
+      ])
+    })
+
+    it('sends null to clear a unit', async () => {
+      const sent = await savedMemberships((form) => {
+        form.seriesMemberships = form.seriesMemberships.map((membership, index) => (index === 0 ? { ...membership, unit: null } : membership))
+      })
+
+      expect(sent).toEqual([
+        { seriesName: 'Harbor of Lanterns', seriesIndex: '87', expectedBookCount: null, unit: null },
+        { seriesName: 'Lantern Tales', seriesIndex: '2', expectedBookCount: 4, unit: null },
+      ])
+    })
+
+    it('carries the unit when only the position changes', async () => {
+      const sent = await savedMemberships((form) => {
+        form.seriesMemberships = form.seriesMemberships.map((membership, index) => (index === 0 ? { ...membership, seriesIndex: '88' } : membership))
+      })
+
+      expect(sent).toEqual([
+        { seriesName: 'Harbor of Lanterns', seriesIndex: '88', expectedBookCount: null, unit: 'chapter' },
+        { seriesName: 'Lantern Tales', seriesIndex: '2', expectedBookCount: 4, unit: null },
+      ])
+    })
+
+    it('sends no memberships when nothing about them changed', async () => {
+      const sent = await savedMemberships((form) => {
+        form.title = 'Embers'
+      })
+
+      expect(sent).toBeUndefined()
+    })
+  })
+
+  describe('normalizeSeriesMemberships', () => {
+    it('leaves out a unit nothing set, so bulk edit keeps each saved unit', () => {
+      expect(normalizeSeriesMemberships([{ seriesName: ' Dune ', seriesIndex: '1', expectedBookCount: null }])).toEqual([
+        { seriesName: 'Dune', seriesIndex: '1', expectedBookCount: null },
+      ])
+      expect(normalizeSeriesMemberships([{ seriesName: 'Dune', seriesIndex: '1', expectedBookCount: null, unit: null }])).toEqual([
+        { seriesName: 'Dune', seriesIndex: '1', expectedBookCount: null, unit: null },
+      ])
+    })
+  })
+
+  it('loads and saves the edition name and first published year with their locks', async () => {
+    const book = makeBook({ editionName: 'Full Cast', originalPublishedYear: null, publishedYear: 2019, publishedDate: '2019-05-01' })
+    apiMock.mockResolvedValue({ ok: true, json: async () => book })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    expect(form.editionName).toBe('Full Cast')
+    expect(form.originalPublishedYear).toBeNull()
+    form.editionName = '25th Anniversary'
+    form.originalPublishedYear = 1965
+    await save(book.id, ['editionName', 'originalPublishedYear'])
+
+    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(req.body))).toEqual({
+      metadata: { editionName: '25th Anniversary', originalPublishedYear: 1965 },
+      lockedFields: ['editionName', 'originalPublishedYear'],
+    })
+  })
+
+  it('reads a book from an older server without the edition fields as unset', () => {
+    const { form, load, isDirty } = useMetadataEditor()
+    load(makeBook())
+
+    expect(form.editionName).toBeNull()
+    expect(form.originalPublishedYear).toBeNull()
+    expect(isDirty.value).toBe(false)
   })
 
   it('sends only changed custom metadata values in the metadata payload', async () => {

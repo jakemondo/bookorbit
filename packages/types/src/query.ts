@@ -13,18 +13,21 @@ import type { CommunityRatingProviderKey } from "./metadata-fetch";
  * - `startedAt` - from `user_book_status.started_at` (per-user)
  * - `finishedAt` - from `user_book_status.finished_at` (per-user)
  * - `author` - resolved via `book_authors` join to `authors.name`
+ * - `authorGender` - resolved via `book_authors` join to `authors.gender`
  * - `genre` - resolved via `book_genres` join to `genres.name`
  * - `tag` - resolved via `book_tags` join to `tags.name`
  * - `collection` - resolved via `collection_books` join to `collections.name`
  * - `library` - resolved via `books.library_id` join to `libraries.name`
  * - `format` - matches `book_files.format` on any of the book's files, not only the primary one
+ * - `storyGuide` - whether any of the book's files has a built Story Guide artifact
  * - `fileSize` - resolved via `book_files.size_bytes` (primary file; rule values are bytes)
  * - `isbn` - matches both `isbn10` and `isbn13` in `book_metadata`
  * - `publishedDate` - uses full dates when available and falls back to published year
  * - `cover` - either cover slot filled (`book_metadata.cover_source` is the summary of both)
  * - `audioCover` - books whose cover media include audio, by whether their audio cover slot is filled
  * - `lockStatus` - derived from `book_metadata.locked_fields` (non-empty array = locked)
- * - `seriesStatus` - computed per-user: "up next in series" (next unstarted book whose earlier series entries are all finished)
+ * - `seriesStatus` - `isUpNext` is computed per-user: "up next in series" (next unstarted book whose earlier series entries are all finished);
+ *   `hasGaps` matches books in a series the Series page lists under Gaps, judged over the books the query can see
  *
  * User-defined custom metadata fields are filterable too, as `CustomRuleField`.
  */
@@ -36,13 +39,17 @@ export type StaticRuleField =
   | "seriesIndex"
   | "publishedDate"
   | "publishedYear"
+  | "originalPublishedYear"
   | "pageCount"
   | "author"
+  | "authorGender"
+  | "storyArc"
   | "genre"
   | "tag"
   | "collection"
   | "library"
   | "format"
+  | "storyGuide"
   | "fileSize"
   | "addedAt"
   | "startedAt"
@@ -103,6 +110,7 @@ export type RuleOperator =
   | "isLocked"
   | "isUnlocked"
   | "isUpNext"
+  | "hasGaps"
   | "isTrue"
   | "isFalse";
 
@@ -112,14 +120,18 @@ export const FIELD_OPERATORS: Record<StaticRuleField, RuleOperator[]> = {
   language: ["eq", "notEq", "includesAny", "excludesAll", "isEmpty", "isNotEmpty"],
   series: ["contains", "notContains", "eq", "notEq", "includesAny", "excludesAll", "isEmpty", "isNotEmpty"],
   author: ["includesAny", "includesAll", "excludesAll", "isEmpty", "isNotEmpty"],
+  authorGender: ["includesAny", "excludesAll", "isEmpty", "isNotEmpty"],
+  storyArc: ["includesAny", "includesAll", "excludesAll", "isEmpty", "isNotEmpty"],
   genre: ["includesAny", "includesAll", "excludesAll", "isEmpty", "isNotEmpty"],
   tag: ["includesAny", "includesAll", "excludesAll", "isEmpty", "isNotEmpty"],
   collection: ["includesAny", "excludesAll", "isEmpty", "isNotEmpty"],
   library: ["includesAny", "excludesAll"],
   format: ["includesAny", "excludesAll"],
+  storyGuide: ["isMissing", "isPresent"],
   fileSize: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   publishedDate: ["before", "after", "between", "withinLast", "moreThanAgo", "isEmpty", "isNotEmpty"],
   publishedYear: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
+  originalPublishedYear: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   seriesIndex: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   pageCount: ["gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   addedAt: ["before", "after", "between", "withinLast", "moreThanAgo"],
@@ -137,7 +149,7 @@ export const FIELD_OPERATORS: Record<StaticRuleField, RuleOperator[]> = {
   cover: ["isMissing", "isPresent"],
   audioCover: ["isMissing", "isPresent"],
   lockStatus: ["isLocked", "isUnlocked"],
-  seriesStatus: ["isUpNext"],
+  seriesStatus: ["isUpNext", "hasGaps"],
 };
 
 export const RULE_FIELDS = Object.keys(FIELD_OPERATORS) as StaticRuleField[];
@@ -193,6 +205,7 @@ export const RULE_OPERATORS: RuleOperator[] = [
   "isLocked",
   "isUnlocked",
   "isUpNext",
+  "hasGaps",
   "isTrue",
   "isFalse",
 ];
@@ -242,7 +255,7 @@ export type GroupRule = {
  * - `fileSize` - fetched from `book_files.size_bytes` for the primary file (correlated subquery)
  * - `readProgress` - aggregated from `reading_progress.percentage` (per-user, correlated subquery)
  * - `readStatus` - from `user_book_status.status` (per-user, correlated subquery)
- * - `lastReadAt` - max `reading_progress.updated_at` across all files (per-user, correlated subquery)
+ * - `lastReadAt` - latest session start or saved reading progress across all files (per-user, correlated subquery)
  * - `startedAt` - from `user_book_status.started_at` (per-user, correlated subquery)
  * - `finishedAt` - from `user_book_status.finished_at` (per-user, correlated subquery)
  * - `rating` - from `user_book_ratings.rating` (per-user, correlated subquery)
@@ -266,6 +279,7 @@ export type StaticSortField =
   | "updatedAt"
   | "publishedDate"
   | "publishedYear"
+  | "originalPublishedYear"
   | "pageCount"
   | "rating"
   | "publisher"
@@ -305,6 +319,7 @@ export const SORT_FIELDS: StaticSortField[] = [
   "updatedAt",
   "publishedDate",
   "publishedYear",
+  "originalPublishedYear",
   "pageCount",
   "rating",
   "publisher",

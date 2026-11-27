@@ -1,4 +1,4 @@
-import { Permission } from '@bookorbit/types'
+import { Permission, PERMISSION_REQUIRES } from '@bookorbit/types'
 
 export interface PermissionGroup {
   id: string
@@ -15,7 +15,13 @@ export interface PermissionGroup {
 export const PERMISSION_GROUPS: PermissionGroup[] = [
   {
     id: 'libraryBooks',
-    use: [Permission.LibraryDownload, Permission.LibraryUpload, Permission.LibraryEditMetadata, Permission.LibraryGenerateReadAloud],
+    use: [
+      Permission.LibraryDownload,
+      Permission.LibraryUpload,
+      Permission.LibraryEditMetadata,
+      Permission.LibraryGenerateReadAloud,
+      Permission.LibraryGenerateStoryGuide,
+    ],
     manage: [Permission.LibraryDeleteBooks, Permission.LibraryMergeBooks],
   },
   {
@@ -118,4 +124,18 @@ export function detectPermissionSelection(selected: ReadonlySet<string>): Permis
     if (names.length === granted.size && names.every((name) => granted.has(name))) return preset
   }
   return 'custom'
+}
+
+export function toggledPermissions(selected: ReadonlySet<string>, permissionName: string): Set<string> {
+  const next = new Set(selected)
+  if (next.has(permissionName)) {
+    next.delete(permissionName)
+    for (const [dependent, required] of Object.entries(PERMISSION_REQUIRES)) {
+      if ((required as readonly string[]).includes(permissionName)) next.delete(dependent)
+    }
+  } else {
+    next.add(permissionName)
+    for (const required of PERMISSION_REQUIRES[permissionName as Permission] ?? []) next.add(required)
+  }
+  return next
 }

@@ -323,7 +323,7 @@ describe('OpdsBookService', () => {
   it('resolves getBookFiles with fallback formatting and title values', async () => {
     const { service } = makeService([
       [],
-      [{ id: 1, updatedAt: new Date('2026-01-01'), absolutePath: '/books/a.epub', format: null, title: null }],
+      [{ id: 1, libraryId: 3, updatedAt: new Date('2026-01-01'), absolutePath: '/books/a.epub', format: null, title: null }],
       [],
     ]);
 
@@ -331,6 +331,7 @@ describe('OpdsBookService', () => {
 
     await expect(service.getBookFiles(7)).resolves.toEqual({
       id: 1,
+      libraryId: 3,
       mtime: undefined,
       sizeBytes: undefined,
       ino: undefined,
@@ -704,7 +705,7 @@ describe('OpdsBookService', () => {
       );
       const ranked = selectFields(db, 3) as { rn: { getSQL(): SQL } };
       expect(renderSql(ranked.rn).sql).toContain(
-        'PARTITION BY "book_series_memberships"."series_id" ORDER BY CASE WHEN "book_series_memberships"."series_index" IS NULL',
+        `PARTITION BY "book_series_memberships"."series_id" ORDER BY (CASE WHEN "book_series_memberships"."series_unit" IN ('chapter', 'issue') THEN 1 ELSE 0 END) ASC, CASE WHEN "book_series_memberships"."series_index" IS NULL`,
       );
       expect(renderSql(ranked.rn).sql).toContain('"book_metadata"."title" ASC NULLS LAST, "books"."id" ASC');
       const outer = renderSql(selectChains(db)[4]!.where.mock.calls[0]![0]);

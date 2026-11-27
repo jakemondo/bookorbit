@@ -2,6 +2,7 @@ import type { AudiobookChapter, NarratorRef } from "./audiobook";
 import type { ConcreteBookMediaKind, CoverMedium } from "./book";
 import type { MetadataCacheServedProvider, MetadataCandidateCacheInfo } from "./metadata-cache";
 import type { SeriesIndex } from "./series-index";
+import type { SeriesUnit } from "./series-unit";
 
 /**
  * Every provider key BookOrbit has a dedicated id field for. Most are built in; the ones in
@@ -165,6 +166,11 @@ export function isMetadataProviderKeySyntax(key: unknown): key is MetadataProvid
 export interface MetadataSeriesMembership {
   seriesName: string;
   seriesIndex?: SeriesIndex | null;
+  /**
+   * Volume, chapter or issue. Omitted leaves a saved membership's unit unchanged; null clears it.
+   * Send it only to servers with `series-units`, which older servers reject. Providers never set it.
+   */
+  unit?: SeriesUnit | null;
 }
 
 export interface BookCommunityRating {
@@ -214,6 +220,8 @@ export interface MetadataCandidate {
   publisher?: string;
   publishedDate?: string;
   publishedYear?: number;
+  /** The work's first publication year, where the provider knows it apart from this record's own year. Absent from older servers. */
+  originalPublishedYear?: number;
   language?: string;
   pageCount?: number;
   isbn10?: string;
@@ -339,6 +347,8 @@ export interface MetadataSource {
   publisher: string | null;
   publishedDate: string | null;
   publishedYear: number | null;
+  /** Absent where the source has no such field, as on a Book Dock file. */
+  originalPublishedYear?: number | null;
   language: string | null;
   pageCount: number | null;
   seriesName: string | null;
